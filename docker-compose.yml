@@ -14,7 +14,7 @@
       SINGLE_USER_PASSWORD: ${PANEL_PASSWORD:-hermiss}
       SINGLE_USER_CONTAINER: ${HERMISS_CONTAINER:-hermiss-single}
       SINGLE_USER_CONTAINER_PORT: ${HERMISS_CONTAINER_PORT:-8770}
-      DOCKER_IMAGE: ${DOCKER_IMAGE:-hermiss:single}
+      DOCKER_IMAGE: ${DOCKER_IMAGE:-ghcr.io/linmumupro/hermiss:single}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:8788,http://localhost:8788,http://127.0.0.1:8000,http://localhost:8000}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

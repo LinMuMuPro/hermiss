@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 
 function Write-Step($text) {
   Write-Host ""
@@ -18,7 +18,7 @@ Set-Location $Root
 
 Write-Host ""
 Write-Host "Hermiss 单用户版一键部署" -ForegroundColor Magenta
-Write-Host "只需要本机已安装并启动 Docker Desktop。"
+Write-Host "只需要本机已安装并启动 Docker Desktop，脚本会自动拉取所需镜像。"
 
 Write-Step "检查 Docker"
 $DockerCmd = $null
@@ -52,20 +52,13 @@ if (!(Test-Path ".env")) {
     "SECRET_KEY=change-me-hermiss-single-user"
     "HERMISS_CONTAINER=hermiss-single"
     "HERMISS_CONTAINER_PORT=8770"
-    "DOCKER_IMAGE=hermiss:single"
+    "DOCKER_IMAGE=ghcr.io/linmumupro/hermiss:single"
   ) | Set-Content -Path ".env" -Encoding UTF8
 }
 
-Write-Step "导入 Hermiss 和 Milvus 镜像"
-$images = @("hermiss.tar.gz", "milvus.tar.gz")
-foreach ($name in $images) {
-  $path = Join-Path $Root $name
-  if (!(Test-Path $path)) {
-    Fail "缺少镜像文件：$name"
-  }
-  Write-Host "正在导入 $name，这一步可能需要几分钟..."
-  & $DockerCmd load -i $path
-}
+Write-Step "拉取 Hermiss 和 Milvus 镜像"
+& $DockerCmd pull ghcr.io/linmumupro/hermiss:single
+& $DockerCmd pull milvusdb/milvus:v2.4.0
 
 Write-Step "启动 Hermiss 单用户版"
 & $DockerCmd compose up -d --build

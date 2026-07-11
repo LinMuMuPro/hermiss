@@ -15,7 +15,7 @@ if not SECRET_KEY:
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
-DOCKER_IMAGE = os.getenv("DOCKER_IMAGE", "hermiss:single-export-20260711")
+DOCKER_IMAGE = os.getenv("DOCKER_IMAGE", "ghcr.io/linmumupro/hermiss:single")
 CONTAINER_PREFIX = "hermiss-"
 PANEL_PORT_BASE = 8770
 HERMES_PROFILE_NAME = "hermiss"

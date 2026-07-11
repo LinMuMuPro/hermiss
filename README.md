@@ -1,65 +1,67 @@
-﻿# Hermiss
+# Hermiss 单用户版
 
-Hermiss 是一个基于 **Hermes agent** 开发的自部署虚拟恋人陪伴系统。
+Hermiss 是基于 Hermes agent 开发的自部署虚拟恋人陪伴助手。它可以通过微信与你自然聊天，支持长期记忆、人设管理、表情包系统和主动回复。
 
-它的目标不是做一个普通问答机器人，而是让 AI 成为一个可以长期相处、会记得用户、能在微信里自然聊天的虚拟陪伴对象。
+这个仓库是 **单用户部署版**：没有多用户管理员端，登录后管理的就是你自己的 Hermiss 容器。
 
-## 项目特点
+## 功能特点
 
-- **微信接入**：支持扫码绑定微信，用户可以直接在微信里和 Hermiss 对话。
-- **长期记忆**：支持保存用户偏好、状态、最近发生的事和关系细节。
-- **人设管理**：支持编辑 SOUL / USER 等人设文件，也支持 AI 生成人设草稿。
-- **表情包系统**：支持上传、分类、预览和按语境发送表情包。
-- **主动回复**：可根据最近对话和时间间隔，主动接续对话或关心用户。
-- **单用户部署**：去掉管理员端，用户登录后只管理自己的 Hermiss 容器。
-- **Docker 部署**：内置一键部署脚本，适合 Windows / Linux / WSL / macOS 使用。
+- **微信扫码绑定**：通过面板扫码绑定微信，无需手动填写复杂配置。
+- **模型配置**：默认 DeepSeek，可在面板里配置 provider、model、base_url 和 API Key。
+- **长期记忆**：支持用户偏好、状态和最近事件的记忆与检索。
+- **人设管理**：支持编辑 `SOUL.md`、`USER.md`，也支持 AI 生成人设草稿。
+- **表情包系统**：支持分类、上传、预览、改名、移动和调用记录。
+- **主动回复**：对话结束后可根据最近上下文生成回访。
+- **一键部署**：用户只需要安装 Docker，脚本会自动拉取镜像并启动面板。
 
-## 适合场景
-
-Hermiss 适合以下场景：
-
-- 个人部署一个长期稳定的虚拟恋人陪伴对象
-- 在微信里使用 AI 陪伴，而不是额外安装聊天 App
-- 自己管理人设、记忆、表情包和模型配置
-- 搭建一个可迁移、可备份、可持续迭代的 AI 陪伴系统
-
-## 快速开始
-
-### Windows
-
-1. 安装并启动 Docker Desktop。
-2. 下载或克隆本项目。
-3. 进入项目目录，双击：
+## 仓库结构
 
 ```text
-一键部署.bat
+.
+├── panel/                    # 单用户面板源码
+├── docs/                     # 部署手册
+├── docker-compose.yml        # 面板编排文件
+├── .env.example              # 环境变量示例
+├── 一键部署.bat              # Windows 一键部署入口
+├── 一键部署.ps1              # Windows PowerShell 部署脚本
+├── 使用说明.txt              # 简短使用说明
+└── README.md
 ```
 
-部署完成后访问：
+> 注意：仓库不再携带 `hermiss.tar.gz` 和 `milvus.tar.gz`。Hermiss 主程序镜像放在 GitHub Packages，Milvus 使用官方 Docker 镜像。
+
+## 镜像来源
+
+| 组件 | 镜像 |
+| --- | --- |
+| Hermiss 主程序 | `ghcr.io/linmumupro/hermiss:single` |
+| Milvus 向量数据库 | `milvusdb/milvus:v2.4.0` |
+| Hermiss 面板 | 本仓库 `panel/` 本地构建 |
+
+## 快速开始：Windows
+
+1. 安装并启动 Docker Desktop。
+2. 下载或 clone 本仓库。
+3. 双击 `一键部署.bat`。
+4. 打开面板：
 
 ```text
 http://127.0.0.1:8788
 ```
 
-默认账号：
+默认账号密码：
 
 ```text
-hermiss
+账号：hermiss
+密码：hermiss
 ```
 
-默认密码：
-
-```text
-hermiss
-```
-
-### Linux / macOS / WSL
-
-进入项目目录后执行：
+## 快速开始：Linux / macOS / WSL
 
 ```bash
-docker load -i hermiss.tar.gz
-docker load -i milvus.tar.gz
+git clone https://github.com/LinMuMuPro/hermiss.git
+cd hermiss
+cp .env.example .env
 docker compose up -d --build
 ```
 
@@ -69,15 +71,9 @@ docker compose up -d --build
 http://127.0.0.1:8788
 ```
 
-## 默认配置
+## 配置项
 
-默认配置文件示例见：
-
-```text
-.env.example
-```
-
-默认内容：
+复制 `.env.example` 为 `.env` 后可以修改：
 
 ```env
 PANEL_HOST=127.0.0.1
@@ -87,105 +83,60 @@ PANEL_PASSWORD=hermiss
 SECRET_KEY=change-me-hermiss-single-user
 HERMISS_CONTAINER=hermiss-single
 HERMISS_CONTAINER_PORT=8770
-DOCKER_IMAGE=hermiss:single
+DOCKER_IMAGE=ghcr.io/linmumupro/hermiss:single
 ```
 
-如果希望手机或局域网其他设备访问面板，可以把：
-
-```env
-PANEL_HOST=127.0.0.1
-```
-
-改成：
+如果你想让局域网手机访问面板，可以把：
 
 ```env
 PANEL_HOST=0.0.0.0
 ```
 
-然后重启服务。
+然后访问电脑局域网 IP，例如：
+
+```text
+http://192.168.x.x:8788
+```
+
+## 常用命令
+
+```bash
+# 启动
+docker compose up -d --build
+
+# 查看状态
+docker compose ps
+
+# 查看日志
+docker compose logs -f
+
+# 停止
+docker compose down
+
+# 更新 Hermiss 主程序镜像
+docker pull ghcr.io/linmumupro/hermiss:single
+docker compose up -d --build
+```
 
 ## 首次使用流程
 
 1. 登录面板。
-2. 配置模型 Provider、Model、Base URL 和 API Key。
+2. 在设置页配置模型 API Key。
 3. 扫码绑定微信。
-4. 配置人设。
-5. 按需配置记忆、表情包、主动回复和回复等待时间。
-6. 在微信里开始对话。
+4. 在人设页确认或修改人设。
+5. 在表情包页上传自己的表情包。
+6. 开始和 Hermiss 聊天。
 
-## 常用命令
+## 详细文档
 
-查看状态：
-
-```bash
-docker compose ps
-```
-
-查看日志：
-
-```bash
-docker compose logs -f
-```
-
-启动服务：
-
-```bash
-docker compose up -d --build
-```
-
-停止服务：
-
-```bash
-docker compose down
-```
-
-重启服务：
-
-```bash
-docker compose restart
-```
-
-查看 Docker 占用：
-
-```bash
-docker system df
-```
-
-## 目录说明
-
-```text
-.
-├── panel/                 # Hermiss 单用户面板源码
-├── docker-compose.yml     # Docker Compose 配置
-├── .env.example           # 默认环境变量示例
-├── hermiss.tar.gz         # Hermiss 主程序镜像包
-├── milvus.tar.gz          # Milvus 向量数据库镜像包
-├── 一键部署.bat            # Windows 一键部署入口
-├── 一键部署.ps1            # Windows PowerShell 部署脚本
-├── 使用说明.txt            # 简短说明
-└── docs/                  # 部署文档
-```
-
-## 详细部署文档
-
-见：
+完整部署说明见：
 
 ```text
 docs/Hermiss单用户部署手册.md
 ```
 
-文档中包含 Windows、Linux、WSL、macOS、局域网访问、防火墙、备份、升级、卸载和常见问题。
+## 说明
 
-## 注意事项
-
-- 镜像包较大，首次导入可能需要几分钟。
-- 不建议直接把面板暴露到公网。
-- 如果必须公网访问，请使用 HTTPS、反向代理和访问控制。
-- 请妥善保管 API Key，不要上传真实 `.env` 文件。
-- 执行清理 Docker 命令前，请确认不会删除数据卷。
-
-## 项目定位
-
-Hermiss 的核心优势不是单纯“模型更聪明”，而是把模型、人设、记忆、微信入口、表情包和主动回复组合成一套长期陪伴体验。
-
-它更像一个可以部署、可以管理、可以持续进化的虚拟恋人陪伴系统，而不是一次性的聊天工具。
+- Hermiss 是陪伴型虚拟恋人助手，不是客服机器人。
+- 请自行保管 API Key、微信账号和本地数据。
+- 如果拉取 `ghcr.io/linmumupro/hermiss:single` 提示无权限，请确认 GitHub Packages 中该镜像已设置为 Public。
