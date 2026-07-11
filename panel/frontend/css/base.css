@@ -1,0 +1,96 @@
+/* ── base.css ──
+   Reset, typography, CSS variables (light theme default) */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 15px;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+:root {
+  /* ── Light theme (default) ── */
+  --bg:            #ffffff;
+  --surface:       #f8f9fa;
+  --surface2:      #f1f3f5;
+  --border:        #e9ecef;
+  --border-hover:  #dee2e6;
+  --text:          #212529;
+  --text2:         #868e96;
+  --text3:         #adb5bd;
+  --accent:        #4263eb;
+  --accent-hover:  #3b5bdb;
+  --accent-muted:  #edf2ff;
+  --danger:        #e03131;
+  --danger-hover:  #c92a2a;
+  --danger-muted:  #fff5f5;
+  --success:       #2b8a3e;
+  --warning:       #e67700;
+  --radius:        8px;
+  --radius-sm:     6px;
+  --sidebar-w:     248px;
+  --shadow:        0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --transition:    .15s ease;
+}
+
+/* ── Dark theme override ── */
+[data-theme="dark"] {
+  --bg:            #0b0b0d;
+  --surface:       #161618;
+  --surface2:      #1e1e21;
+  --border:        #2a2a2e;
+  --border-hover:  #3e3e44;
+  --text:          #e4e4e7;
+  --text2:         #71717a;
+  --text3:         #52525b;
+  --accent:        #5c7cfa;
+  --accent-hover:  #748ffc;
+  --accent-muted:  #1a2142;
+  --danger:        #f87171;
+  --danger-hover:  #fca5a5;
+  --danger-muted:  #2d1215;
+  --success:       #4ade80;
+  --warning:       #facc15;
+  --shadow:        0 1px 3px rgba(0,0,0,.2);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  transition: background var(--transition), color var(--transition);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+
+h2 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-bottom: 20px;
+  color: var(--text);
+}
+
+h3 {
+  font-size: .9rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--text3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text2); }
+
+/* Selection */
+::selection { background: var(--accent); color: #fff; }

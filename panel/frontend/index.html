@@ -1,0 +1,107 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hermiss Single Panel</title>
+
+<!-- CSS -->
+<link rel="stylesheet" href="css/base.css?v=12">
+<link rel="stylesheet" href="css/layout.css?v=14">
+<link rel="stylesheet" href="css/components.css?v=26">
+</head>
+<body>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<!-- Restart overlay -->
+<div id="restart-overlay">
+  <div id="restart-box">
+    <div class="restart-spinner"></div>
+    <p id="restart-msg">容器重启中，请稍候...</p>
+  </div>
+</div>
+
+<!-- Custom Dialog -->
+<div id="dialog-overlay">
+  <div id="dialog-box">
+    <p id="dialog-msg"></p>
+    <input id="dialog-input" class="form-group" type="text" style="display:none;width:100%">
+    <div class="btn-group">
+      <button class="btn" id="dialog-cancel">取消</button>
+      <button class="btn btn-primary" id="dialog-ok">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Auth Page ── -->
+<div id="auth-page">
+  <div id="auth-card">
+    <h1 id="auth-title">登录</h1>
+    <p class="auth-sub" id="auth-sub">单用户版本，默认账号 hermiss / hermiss</p>
+    <div id="auth-form">
+      <div class="form-group">
+        <label>账号</label>
+        <input type="text" id="auth-email" placeholder="默认账号 hermiss" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label>密码</label>
+        <input type="password" id="auth-password" placeholder="默认密码 hermiss" autocomplete="current-password">
+      </div>
+      <button class="btn btn-primary btn-block" id="auth-submit">登录</button>
+    </div>
+    <p class="auth-toggle" style="display:none"><a href="#" id="auth-toggle">注册</a></p>
+  </div>
+</div>
+
+<header class="mobile-header">
+  <button class="hamburger" id="mobile-menu-btn" aria-label="菜单">
+    <span></span><span></span><span></span>
+  </button>
+  <span class="brand">Hermiss Panel</span>
+</header>
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+<!-- ── App Shell ── -->
+<div id="app">
+  <div class="layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">Hermiss Panel</div>
+      <nav class="sidebar-nav" id="sidebar-nav"></nav>
+      <div class="sidebar-footer" id="sidebar-footer"></div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main">
+      <div id="page-dashboard" class="page"></div>
+      <div id="page-usage" class="page"></div>
+      <div id="page-container" class="page"></div>
+      <div id="page-persona" class="page"></div>
+      <div id="page-memory" class="page"></div>
+      <div id="page-stickers" class="page"></div>
+      <div id="page-cron" class="page"></div>
+      <div id="page-settings" class="page"></div>
+    </main>
+  </div>
+</div>
+
+<!-- JS -->
+<script src="js/config.js?v=11"></script>
+<script src="js/api.js?v=12"></script>
+<script src="js/dialog.js?v=11"></script>
+<script src="js/toast.js?v=11"></script>
+<script src="js/router.js?v=14"></script>
+<script src="js/pages/usage.js?v=11"></script>
+<script src="js/pages/dashboard.js?v=18"></script>
+<script src="js/pages/container.js?v=11"></script>
+<script src="js/pages/persona.js?v=15"></script>
+<script src="js/pages/memory.js?v=13"></script>
+<script src="js/pages/cron.js?v=11"></script>
+<script src="js/pages/settings.js?v=25"></script>
+<script src="js/pages/stickers.js?v=8"></script>
+<script src="js/app.js?v=15"></script>
+
+</body>
+</html>

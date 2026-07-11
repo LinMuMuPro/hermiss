@@ -1,0 +1,56 @@
+{
+  "enabled": true,
+  "cooldown_seconds": 600,
+  "max_per_turn": 1,
+  "inject_only_for_platforms": ["weixin"],
+  "intents": {
+    "hug": [
+      {
+        "path": "assets/stickers/hug_soft.png",
+        "weight": 1
+      }
+    ],
+    "comfort": [
+      {
+        "path": "assets/stickers/comfort_soft.png",
+        "weight": 1
+      }
+    ],
+    "happy": [
+      {
+        "path": "assets/stickers/happy.png",
+        "weight": 1
+      }
+    ],
+    "shy": [
+      {
+        "path": "assets/stickers/shy.png",
+        "weight": 1
+      }
+    ],
+    "angry_cute": [
+      {
+        "path": "assets/stickers/angry_cute.png",
+        "weight": 1
+      }
+    ],
+    "goodnight": [
+      {
+        "path": "assets/stickers/goodnight.png",
+        "weight": 1
+      }
+    ],
+    "food": [
+      {
+        "path": "assets/stickers/food.png",
+        "weight": 1
+      }
+    ],
+    "miss_you": [
+      {
+        "path": "assets/stickers/miss_you.png",
+        "weight": 1
+      }
+    ]
+  }
+}

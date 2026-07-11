@@ -1,0 +1,9 @@
+﻿Hermiss 单用户版部署说明
+
+1. 确认已安装并启动 Docker Desktop。
+2. 双击“一键部署.bat”。
+3. 部署完成后访问：http://127.0.0.1:8788
+4. 默认账号：hermiss
+5. 默认密码：hermiss
+
+停止服务：在本目录打开终端执行 docker compose down

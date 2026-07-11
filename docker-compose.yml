@@ -1,0 +1,24 @@
+﻿services:
+  panel:
+    build:
+      context: ./panel
+    container_name: hermiss-single-panel
+    restart: unless-stopped
+    ports:
+      - "${PANEL_HOST:-127.0.0.1}:${PANEL_PORT:-8000}:8000"
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-change-me-hermiss-single-user}
+      DATABASE_URL: sqlite:////app/data/hermes_panel.db
+      SINGLE_USER_MODE: "true"
+      SINGLE_USER_EMAIL: ${PANEL_USERNAME:-hermiss}
+      SINGLE_USER_PASSWORD: ${PANEL_PASSWORD:-hermiss}
+      SINGLE_USER_CONTAINER: ${HERMISS_CONTAINER:-hermiss-single}
+      SINGLE_USER_CONTAINER_PORT: ${HERMISS_CONTAINER_PORT:-8770}
+      DOCKER_IMAGE: ${DOCKER_IMAGE:-hermiss:single}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:8788,http://localhost:8788,http://127.0.0.1:8000,http://localhost:8000}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - hermiss-single-panel-data:/app/data
+
+volumes:
+  hermiss-single-panel-data:

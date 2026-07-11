@@ -1,0 +1,14 @@
+fastapi>=0.115.0
+uvicorn>=0.34.0
+sqlalchemy>=2.0.36
+passlib[bcrypt]>=1.7.4
+pyjwt>=2.10.0
+docker>=7.1.0
+python-dotenv>=1.0.0
+python-multipart>=0.0.18
+email-validator>=2.0.0
+aiofiles>=24.0.0
+qrcode>=7.4
+requests>=2.31
+PyYAML>=6.0.1
+cryptography>=42,<46

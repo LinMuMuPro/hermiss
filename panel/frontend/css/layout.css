@@ -1,0 +1,236 @@
+/* ── layout.css ──
+   App layout, sidebar, main content area, auth page */
+
+/* ── Auth page ── */
+#auth-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--bg);
+}
+
+#auth-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 32px;
+  width: 100%;
+  max-width: 380px;
+}
+
+#auth-card h1 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text);
+}
+
+#auth-card .auth-sub {
+  font-size: .85rem;
+  color: var(--text2);
+  margin-bottom: 24px;
+}
+
+.auth-toggle {
+  text-align: center;
+  margin-top: 14px;
+  font-size: .82rem;
+  color: var(--text2);
+}
+
+/* ── App shell ── */
+#app {
+  display: none;
+  min-height: 100vh;
+}
+
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  width: var(--sidebar-w);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 20px 0;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 100;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.sidebar-brand {
+  padding: 0 24px 18px;
+  font-size: .9rem;
+  font-weight: 700;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.sidebar-nav {
+  flex: 1;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 24px;
+  font-size: .96rem;
+  color: var(--text2);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+}
+
+.nav-item:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+
+.nav-item.active {
+  color: var(--accent);
+  background: var(--accent-muted);
+  font-weight: 500;
+}
+
+.nav-item svg {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+  opacity: .7;
+}
+
+.nav-item.active svg {
+  opacity: 1;
+}
+
+/* ── Sidebar footer ── */
+.sidebar-footer {
+  padding: 18px 24px 0;
+  border-top: 1px solid var(--border);
+  margin-top: auto;
+}
+
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: .9rem;
+  color: var(--text2);
+}
+
+.theme-switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.theme-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.theme-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--border);
+  border-radius: 22px;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.theme-slider::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform var(--transition);
+  box-shadow: 0 1px 3px rgba(0,0,0,.15);
+}
+
+.theme-switch input:checked + .theme-slider {
+  background: var(--accent);
+}
+
+.theme-switch input:checked + .theme-slider::after {
+  transform: translateX(18px);
+}
+
+.btn-logout {
+  background: none;
+  border: none;
+  color: var(--text3);
+  cursor: pointer;
+  font-size: .8rem;
+  font-family: inherit;
+  padding: 4px 0;
+  transition: color var(--transition);
+}
+
+.btn-logout:hover {
+  color: var(--danger);
+}
+
+/* ── Main content area ── */
+.main {
+  margin-left: var(--sidebar-w);
+  flex: 1;
+  padding: 32px clamp(24px, 4vw, 56px);
+  width: calc(100% - var(--sidebar-w));
+  max-width: none;
+  box-sizing: border-box;
+}
+
+.page {
+  display: none;
+}
+
+.page.active {
+  display: block;
+}
+
+/* ── Mobile ── */
+@media (max-width: 768px) {
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform .2s ease;
+    z-index: 300;
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .main {
+    margin-left: 0;
+    padding: 20px 16px;
+    margin-top: 48px;
+  }
+
+  #auth-card {
+    padding: 24px;
+  }
+}

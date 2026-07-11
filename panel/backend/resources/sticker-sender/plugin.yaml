@@ -1,0 +1,10 @@
+name: sticker-sender
+kind: standalone
+description: >
+  Hermiss 表情包发送插件。通过短 prompt 协议让 LLM 输出 <sticker intent="..."/>，
+  插件本地按白名单选择表情包文件并转换为 MEDIA: 路径发送，避免把完整表情包库塞进上下文。
+  不额外调用 LLM，低 token 消耗。
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - transform_llm_output

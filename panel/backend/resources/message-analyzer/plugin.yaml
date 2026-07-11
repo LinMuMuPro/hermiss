@@ -1,0 +1,16 @@
+name: message-analyzer
+kind: standalone
+description: >
+  Hermes 虚拟伴侣消息分析引擎 v1.0.1。
+  四步流水线：独立分类(ctx.llm) → SQLite FTS5 宽口径粗筛 → 注入到 user message context。
+  v1.0 新增：LLM 决策的主动消息 — 会话结束时由 LLM 判断多久后回访用户，自动创建一次性 cron job + Web 管理面板。
+  uses pre_llm_call (context injection) + transform_llm_output (strip classify blocks) +
+  on_session_start (cancel check-in) + on_session_end (schedule check-in).
+  Requires Hermes v0.13.0+.
+provides_hooks:
+  - pre_llm_call
+  - transform_llm_output
+  - post_llm_call
+  - post_tool_call
+  - on_session_start
+  - on_session_end
