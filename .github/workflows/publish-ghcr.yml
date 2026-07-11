@@ -1,0 +1,44 @@
+﻿name: Publish Hermiss image to GHCR
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository with LFS
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Verify image archive
+        run: |
+          test -f hermiss.tar.gz
+          ls -lh hermiss.tar.gz
+
+      - name: Load image
+        run: docker load -i hermiss.tar.gz
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag image
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          docker tag hermiss:single ghcr.io/$OWNER/hermiss:single
+          docker tag hermiss:single ghcr.io/$OWNER/hermiss:latest
+
+      - name: Push image
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          docker push ghcr.io/$OWNER/hermiss:single
+          docker push ghcr.io/$OWNER/hermiss:latest
