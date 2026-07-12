@@ -1,10 +1,7 @@
-/* ── app.js ──
-   App init: auth check, sidebar, theme toggle, logout
-   v4.0 — fixed sidebar (5 user / 8 admin), no simple mode */
+﻿/* app.js - single-user panel bootstrap */
 
 const Q = (sel, parent = document) => parent.querySelector(sel);
 
-// ── Theme ──
 function initTheme() {
   const saved = localStorage.getItem(THEME_KEY) || 'light';
   document.documentElement.setAttribute('data-theme', saved);
@@ -19,18 +16,10 @@ function toggleTheme() {
   localStorage.setItem(THEME_KEY, next);
 }
 
-// ── User info ──
-function getUser() {
-  try {
-    return JSON.parse(localStorage.getItem('hermes_user') || '{}');
-  } catch (_) { return {}; }
-}
-
 function isAdmin() {
   return false;
 }
 
-// ── Sidebar ──
 const userNavItems = [
   { route: 'persona', label: '人设', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="5" r="2"/><path d="M2 14c0-2.2 1.8-4 4-4 2.2 0 4 1.8 4 4"/><circle cx="10" cy="4" r="1.5"/><path d="M12 7.5c1.1 0 2 .9 2 2v2"/></svg>' },
   { route: 'memory', label: '记忆', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="1.5"/><path d="M5 7h6M5 10h4"/></svg>' },
@@ -38,15 +27,11 @@ const userNavItems = [
   { route: 'settings', label: '设置', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="3"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.1 3.1l1 1M11.9 11.9l1 1M3.1 12.9l1-1M11.9 4.1l1-1"/></svg>' },
 ];
 
-const adminNavItems = [];
-
 function initSidebar() {
   const nav = Q('#sidebar-nav');
   const footer = Q('#sidebar-footer');
 
-  const items = userNavItems;
-
-  nav.innerHTML = items.map(n =>
+  nav.innerHTML = userNavItems.map(n =>
     `<button class="nav-item" data-route="${n.route}">${n.icon}<span>${n.label}</span></button>`
   ).join('');
 
@@ -66,10 +51,10 @@ function initSidebar() {
     <button class="btn-logout" id="btn-logout">退出登录</button>
   `;
 
-  Q('#theme-toggle-input').addEventListener('change', toggleTheme);
+  Q('#theme-toggle-input')?.addEventListener('change', toggleTheme);
   initTheme();
 
-  Q('#btn-logout').addEventListener('click', async () => {
+  Q('#btn-logout')?.addEventListener('click', async () => {
     const ok = await dialogConfirm('确定退出登录？');
     if (ok) {
       localStorage.removeItem(TOKEN_KEY);
@@ -79,36 +64,32 @@ function initSidebar() {
   });
 }
 
-// ── 全局：重启等待 ──
 function showRestartOverlay(msg) {
-  const ov = document.getElementById('restart-overlay');
-  const m = document.getElementById('restart-msg');
-  if (m) m.textContent = msg || '容器重启中，请稍候...';
-  if (ov) ov.classList.add('open');
+  const overlay = document.getElementById('restart-overlay');
+  const message = document.getElementById('restart-msg');
+  if (message) message.textContent = msg || '容器重启中，请稍候...';
+  if (overlay) overlay.classList.add('open');
 }
 
 function hideRestartOverlay() {
-  const ov = document.getElementById('restart-overlay');
-  if (ov) ov.classList.remove('open');
+  document.getElementById('restart-overlay')?.classList.remove('open');
 }
 
 async function waitForRestart(timeoutSec = 60) {
   const maxAttempts = Math.ceil(timeoutSec / 2);
   for (let i = 0; i < maxAttempts; i++) {
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(resolve => setTimeout(resolve, 2000));
     try {
-      const s = await api('/api/container/status');
-      if (s.status === 'running') return;
-    } catch (_) { /* 继续等待 */ }
+      const status = await api('/api/container/status');
+      if (status.status === 'running') return;
+    } catch (_) {
+      // keep waiting
+    }
   }
   throw new Error(`容器启动超时（${timeoutSec}秒），请手动刷新`);
 }
 
-// ── Auth ──
-let authMode = 'login';
-
 function initAuth() {
-  authMode = 'login';
   const title = Q('#auth-title');
   const sub = Q('#auth-sub');
   const btn = Q('#auth-submit');
@@ -117,15 +98,15 @@ function initAuth() {
   if (title) title.textContent = '登录';
   if (sub) sub.textContent = '单用户版本，默认账号 hermiss / hermiss';
   if (btn) btn.textContent = '登录';
-  if (toggle && toggle.parentElement) toggle.parentElement.style.display = 'none';
+  if (toggle?.parentElement) toggle.parentElement.style.display = 'none';
 
-  btn.addEventListener('click', async () => {
+  btn?.addEventListener('click', async () => {
     const email = Q('#auth-email').value.trim();
     const password = Q('#auth-password').value;
     if (!email || !password) return toast('请填写账号和密码', 'err');
 
     btn.disabled = true;
-    btn.textContent = '...';
+    btn.textContent = '登录中...';
 
     try {
       const data = await api('/api/auth/login', {
@@ -160,8 +141,8 @@ function initAuth() {
     }
   });
 
-  Q('#auth-password').addEventListener('keydown', e => {
-    if (e.key === 'Enter') btn.click();
+  Q('#auth-password')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') btn?.click();
   });
 }
 
@@ -172,10 +153,9 @@ function showApp() {
   initMobileMenu();
 
   const route = location.hash.slice(1);
-  navigate(routes.includes(route.split("/")[0]) ? route : "persona");
+  navigate(routes.includes(route.split('/')[0]) ? route : 'persona');
 }
 
-// ── Mobile menu ──
 function initMobileMenu() {
   const sidebar = document.querySelector('.sidebar');
   const overlay = document.getElementById('sidebar-overlay');
@@ -193,7 +173,6 @@ function initMobileMenu() {
     overlay.classList.remove('open');
   });
 
-  // Close on nav click
   sidebar.addEventListener('click', e => {
     if (e.target.closest('.nav-item')) {
       sidebar.classList.remove('mobile-open');
@@ -211,10 +190,9 @@ function showAuth() {
   const pending = Q('#auth-pending');
   if (pending) pending.style.display = 'none';
   const authToggle = Q('#auth-toggle');
-  if (authToggle && authToggle.parentElement) authToggle.parentElement.style.display = 'none';
+  if (authToggle?.parentElement) authToggle.parentElement.style.display = 'none';
 }
 
-// ── Bootstrap ──
 document.addEventListener('DOMContentLoaded', () => {
   initAuth();
 
@@ -226,7 +204,5 @@ document.addEventListener('DOMContentLoaded', () => {
 
   api('/api/auth/me')
     .then(() => showApp())
-    .catch(err => {
-      showAuth();
-    });
+    .catch(() => showAuth());
 });
