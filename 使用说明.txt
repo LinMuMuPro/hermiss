@@ -1,0 +1,12 @@
+﻿Hermiss 单用户版
+
+1. 先安装并启动 Docker Desktop。
+2. 双击“一键部署.bat”。
+3. 浏览器打开：http://127.0.0.1:8788
+4. 默认账号：hermiss
+5. 默认密码：hermiss
+
+说明：
+- Hermiss 主程序镜像会从 ghcr.io/linmumupro/hermiss:single 自动拉取。
+- Milvus 会从官方镜像 milvusdb/milvus:v2.4.0 自动拉取。
+- 仓库不再携带 hermiss.tar.gz / milvus.tar.gz 离线镜像包。
