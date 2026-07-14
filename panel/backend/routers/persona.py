@@ -57,11 +57,11 @@ class PersonaGenerate(BaseModel):
 
 TEMPLATES = {
     "clear": {
-        "name": "??", "type": "none",
+        "name": "清空人设", "type": "none",
         "soul": "",
     },
     "default": {
-        "name": "????", "type": "none",
+        "name": "默认人设", "type": "none",
         "soul": _default_persona_soul(),
     },
 }

@@ -53,10 +53,10 @@ window.Pages.persona = async function(el) {
         <div class="btn-group">
           <button class="btn btn-primary" id="btn-save-persona">保存人设</button>
           ${templates && templates.templates ? templates.templates.map(t =>
-            `<button class="btn btn-sm btn-tpl" data-tpl="${escapeHtml(t.id)}">应用：${escapeHtml(t.name)}</button>`
+            `<button class="btn btn-sm btn-tpl" data-tpl="${escapeHtml(t.id)}">${escapeHtml(t.name)}</button>`
           ).join('') : ''}
         </div>
-        <p class="form-hint">保存或应用模板后会重启容器（约 5-10 秒）。</p>
+        <p class="form-hint">保存或选择模板后会重启容器（约 5-10 秒）。</p>
       </div>
 
       <div class="card persona-card persona-generate-card">
