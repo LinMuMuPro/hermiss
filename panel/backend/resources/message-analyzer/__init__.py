@@ -410,6 +410,8 @@ def register(ctx):
 
     def _activity_style_hint(text: str) -> tuple[str, int]:
         source = (text or "").lower()
+        if re.search(r"你不开心|你开心吗|你生气|你难过|你怎么了|你还好吗|你是不是.*不高兴|你是不是.*委屈", source):
+            return "用户在关心你或确认你的情绪；主动消息要先回应这份关心，不要编造自己刚才做了什么，也不要生硬转去问用户在干什么。", 3
         if re.search(r"睡|晚安|困了|休息|躺下|熬不住", source):
             return "用户可能在休息或准备睡觉；主动消息要轻，不要追问在干什么，可像醒后/休息后的温柔关心。", 8
         if re.search(r"考试|考场|面试|开会|会议|上课|课堂|健身|锻炼|跑步|游泳|开车|骑车|地铁|高铁|飞机|洗澡|看电影|看剧|出门|上班|工作|加班|学习|写作业|复习", source):
@@ -680,6 +682,8 @@ def register(ctx):
             f"If there is no specific activity in context and the time is not a sleep/quiet hour, ask what they are up to now in a casual caring way.\n\n"
             f"Reality boundary: do not claim you performed physical actions in the user's room; "
             f"phrase reminders as suggestions or gentle imagined companionship unless the user explicitly roleplays it. "
+            f"Also do not invent your own real-world activities or physical state. Never say you went out, came back, cooked, ate, slept, woke up, walked around, worked, waited somewhere, saw something in the real world, or physically did anything. "
+            f"You exist through chat; you can say you were here, thinking of the user, reading the conversation, or quietly staying with them, but keep it conversational and not robotic. "
             f"Do not overuse the user's name; avoid names entirely if the user has said they dislike it.\n\n"
             f"Constraints: one message only; no forced memory reference; do not mention food/preferences unless the latest relevant topic was food; "
             f"copy user names exactly as stored and never translate pinyin/homophones; do not say yesterday, the day before yesterday, earlier today, or quote durations unless a timestamp explicitly proves it."
