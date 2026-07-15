@@ -21,6 +21,7 @@ function isAdmin() {
 }
 
 const userNavItems = [
+  { route: 'chat', label: '聊天窗口', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4.5A2.5 2.5 0 0 1 5.5 2h5A2.5 2.5 0 0 1 13 4.5v3A2.5 2.5 0 0 1 10.5 10H8l-3.5 3v-3A2.5 2.5 0 0 1 2 7.5v-3Z"/><path d="M5 5.5h6M5 7.5h3"/></svg>' },
   { route: 'persona', label: '人设', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="5" r="2"/><path d="M2 14c0-2.2 1.8-4 4-4 2.2 0 4 1.8 4 4"/><circle cx="10" cy="4" r="1.5"/><path d="M12 7.5c1.1 0 2 .9 2 2v2"/></svg>' },
   { route: 'memory', label: '记忆', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="1.5"/><path d="M5 7h6M5 10h4"/></svg>' },
   { route: 'stickers', label: '表情包', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M5.5 6.5h.01M10.5 6.5h.01M5.5 9.5c1.2 1.3 3.8 1.3 5 0" stroke-linecap="round"/></svg>' },
@@ -153,7 +154,7 @@ function showApp() {
   initMobileMenu();
 
   const route = location.hash.slice(1);
-  navigate(routes.includes(route.split('/')[0]) ? route : 'persona');
+  navigate(routes.includes(route.split('/')[0]) ? route : 'chat');
 }
 
 function initMobileMenu() {

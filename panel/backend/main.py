@@ -27,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from routers import auth, containers, wechat, persona, memory, cron, settings, usage
+from routers import auth, containers, wechat, persona, memory, cron, settings, usage, chat
 app.include_router(auth.router)
 app.include_router(containers.router)
 app.include_router(wechat.router)
@@ -36,6 +36,7 @@ app.include_router(memory.router)
 app.include_router(cron.router)
 app.include_router(settings.router)
 app.include_router(usage.router)
+app.include_router(chat.router)
 
 
 @app.get("/api/health")

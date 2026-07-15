@@ -1,9 +1,9 @@
 window.Pages = window.Pages || {};
 const routes = [
-  'persona', 'memory', 'stickers', 'settings'
+  'chat', 'persona', 'memory', 'stickers', 'settings'
 ];
 
-let currentRoute = 'persona';
+let currentRoute = 'chat';
 let _navigating = false;
 
 function navigate(route) {
@@ -41,7 +41,7 @@ window.addEventListener('hashchange', () => {
   if (_navigating) return;
   const route = location.hash.slice(1) || 'persona';
   const base = route.split('/')[0];
-  if (!routes.includes(base)) return navigate('persona');
+  if (!routes.includes(base)) return navigate('chat');
   if (currentRoute === route) return;
   currentRoute = route;
   _renderRoute(route);
@@ -49,5 +49,5 @@ window.addEventListener('hashchange', () => {
 
 function initRoute() {
   const route = location.hash.slice(1);
-  navigate(routes.includes(route.split('/')[0]) ? route : 'persona');
+  navigate(routes.includes(route.split('/')[0]) ? route : 'chat');
 }
