@@ -53,12 +53,20 @@ try { & $DockerCmd version | Out-Null } catch { Fail "Docker is not running or i
 
 Step "Preparing .env"
 if (!(Test-Path ".env")) {
+  $secretBytes = New-Object byte[] 48
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $rng.GetBytes($secretBytes)
+    $secretKey = [Convert]::ToBase64String($secretBytes)
+  } finally {
+    $rng.Dispose()
+  }
   @(
     "PANEL_HOST=127.0.0.1"
     "PANEL_PORT=8788"
     "PANEL_USERNAME=hermiss"
     "PANEL_PASSWORD=hermiss"
-    "SECRET_KEY=$([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48)))"
+    "SECRET_KEY=$secretKey"
     "HERMISS_CONTAINER=hermiss-single"
     "HERMISS_CONTAINER_PORT=8770"
     "DOCKER_IMAGE=ghcr.io/linmumupro/hermiss:single"
