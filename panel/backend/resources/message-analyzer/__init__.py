@@ -693,6 +693,9 @@ def register(ctx):
         fire_at = fire_at_dt.isoformat()
         local_time = _local_time_text()
         trigger_local_time = _local_time_text_for(fire_at_dt)
+        effective_delay_seconds = max(60, int((fire_at_dt - created_at).total_seconds()))
+        effective_delay_minutes = max(1, (effective_delay_seconds + 59) // 60)
+        effective_delay = f"{effective_delay_minutes}m"
 
         # Write the tracking file first (the cron job self-checks against it).
         # Every user message cancels this file; newly scheduled check-ins get a
@@ -701,6 +704,8 @@ def register(ctx):
         cf.write_text(json.dumps({
             "cancelled": False,
             "check_in_hours": check_in_hours,
+            "effective_delay_minutes": effective_delay_minutes,
+            "effective_delay": effective_delay,
             "checkin_id": checkin_id,
             "created_at": created_at.isoformat(),
             "fire_at": fire_at,
@@ -719,7 +724,10 @@ def register(ctx):
         persona_context = _build_persona_context()
         transcript_block = recent_context_with_time or recent_context or "(no recent transcript captured)"
         last_activity_block = last_activity_hint or "(no latest user activity captured)"
-        context_age_hint = f"about {check_in_hours} hour(s)"
+        if effective_delay_minutes >= 60:
+            context_age_hint = f"about {round(effective_delay_minutes / 60, 1)} hour(s)"
+        else:
+            context_age_hint = f"about {effective_delay_minutes} minute(s)"
         prompt = (
             f"[HERMES PROACTIVE REPLY]\n\n"
             f"Read the active_checkin.json file at {cf}. If cancelled=true, "
@@ -765,10 +773,9 @@ def register(ctx):
         if memory_context:
             prompt += f"\n\nMemory context is authoritative user background. Use it only when naturally relevant, but do not contradict it:\n{memory_context}"
 
-        delay = f"{check_in_hours}h"
         try:
             result = subprocess.run(
-                ["hermes", "--profile", profile, "cron", "create", delay, prompt, "--deliver", _resolve_deliver_target()],
+                ["hermes", "--profile", profile, "cron", "create", effective_delay, prompt, "--deliver", _resolve_deliver_target()],
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode == 0:
@@ -778,7 +785,7 @@ def register(ctx):
                 cf.write_text(json.dumps(data, indent=2, ensure_ascii=False))
                 state["checkin_dirty"] = False
                 print(
-                    f"[message-analyzer] Check-in cron: {check_in_hours}h "
+                    f"[message-analyzer] Check-in cron: {effective_delay} "
                     f"(fire at {fire_at[:16]}, job={job_id})"
                 )
             else:
