@@ -200,6 +200,12 @@
   width: 100%;
 }
 
+#page-chat.active {
+  height: calc(100vh - 64px);
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* ── Cards ── */
 .card {
   background: var(--surface);
@@ -226,14 +232,16 @@
 .chat-panel {
   display: flex;
   flex-direction: column;
-  min-height: min(680px, calc(100vh - 150px));
+  flex: 1;
+  min-height: 0;
   padding: 0;
+  margin-bottom: 0;
   overflow: hidden;
 }
 
 .chat-history {
   flex: 1;
-  min-height: 360px;
+  min-height: 0;
   padding: 18px;
   overflow: auto;
   background:
@@ -358,6 +366,10 @@
 }
 
 @media (max-width: 640px) {
+  #page-chat.active {
+    height: calc(100vh - 88px);
+  }
+
   .chat-bubble {
     max-width: 90%;
   }
