@@ -375,6 +375,28 @@ def register(ctx):
             now = datetime.now()
         return now.strftime("%Y-%m-%d %H:%M:%S %Z")
 
+    def _read_profile_markdown(path: Path, limit: int = 6000) -> str:
+        try:
+            if not path.exists() or not path.is_file():
+                return ""
+            text = path.read_text(encoding="utf-8", errors="ignore").strip()
+            if len(text) > limit:
+                text = text[:limit].rstrip() + "\n...(truncated)"
+            return text
+        except Exception as e:
+            print(f"[message-analyzer] read profile file failed: {path}: {e}")
+            return ""
+
+    def _build_persona_context() -> str:
+        soul_text = _read_profile_markdown(hermes_home / "SOUL.md")
+        user_text = _read_profile_markdown(hermes_home / "memories" / "USER.md")
+        parts = []
+        if soul_text:
+            parts.append(f"SOUL.md persona:\n{soul_text}")
+        if user_text:
+            parts.append(f"USER.md user profile:\n{user_text}")
+        return "\n\n".join(parts)
+
     def _quiet_hour_policy(target_dt_utc: datetime, style_hint: str, source_text: str) -> tuple[datetime, str, bool]:
         """Delay generic proactive replies during likely sleep hours."""
         try:
@@ -694,6 +716,7 @@ def register(ctx):
 
         # Build the self-contained proactive reply prompt.
         memory_context = build_full_context(db, "__CHECKIN__")
+        persona_context = _build_persona_context()
         transcript_block = recent_context_with_time or recent_context or "(no recent transcript captured)"
         last_activity_block = last_activity_hint or "(no latest user activity captured)"
         context_age_hint = f"about {check_in_hours} hour(s)"
@@ -701,6 +724,11 @@ def register(ctx):
             f"[HERMES PROACTIVE REPLY]\n\n"
             f"Read the active_checkin.json file at {cf}. If cancelled=true, "
             f"or if checkin_id is not exactly {checkin_id}, return exactly [SILENT] and nothing else.\n\n"
+            f"Before writing, read and obey the current persona and user profile files if available: "
+            f"{hermes_home / 'SOUL.md'} and {hermes_home / 'memories' / 'USER.md'}. "
+            f"Your relationship, identity, tone, boundaries, names, and user preferences must follow SOUL.md, USER.md, and the memory system. "
+            f"If recent_context conflicts with persona, USER.md, or memory_context, persona and memory win. "
+            f"Do not invent a different identity, relationship, name, user nickname, or speaking style.\n\n"
             f"If not cancelled and the checkin_id matches, generate ONE short, warm, natural proactive reply in Chinese. "
             f"Do not mention how many hours passed, do not say 'you have not messaged', and do not sound like monitoring.\n\n"
             f"Current local time when this proactive job was scheduled: {local_time}. "
@@ -732,8 +760,10 @@ def register(ctx):
             f"Constraints: one message only; no forced memory reference; do not mention food/preferences unless the latest relevant topic was food; "
             f"copy user names exactly as stored and never translate pinyin/homophones; do not say yesterday, the day before yesterday, earlier today, or quote durations unless a timestamp explicitly proves it."
         )
+        if persona_context:
+            prompt += f"\n\nPersona and user profile context are authoritative. Follow them over generic rules when they conflict:\n{persona_context}"
         if memory_context:
-            prompt += f"\n\nMemory context is optional background only; use it only if naturally relevant:\n{memory_context}"
+            prompt += f"\n\nMemory context is authoritative user background. Use it only when naturally relevant, but do not contradict it:\n{memory_context}"
 
         delay = f"{check_in_hours}h"
         try:
