@@ -109,6 +109,7 @@ def classify_locally(message: str) -> dict | None:
     roleplay_patterns = [
         (r"你是(?:伊娃|EVE|eve).{0,12}我(?:就是|是)(?:瓦力|WALL[- ]?E|wall[- ]?e)", "用户把助手比作伊娃，把自己比作瓦力"),
         (r"我(?:就是|是)(?:瓦力|WALL[- ]?E|wall[- ]?e).{0,12}你是(?:伊娃|EVE|eve)", "用户把自己比作瓦力，把助手比作伊娃"),
+        (r"^(?:那)?我(?:就是|是)(?:瓦力|WALL[- ]?E|wall[- ]?e)[。.!！?？,，、\s]*$", "用户把自己比作瓦力"),
     ]
     for pattern, entry in roleplay_patterns:
         if re.search(pattern, text, re.IGNORECASE):
