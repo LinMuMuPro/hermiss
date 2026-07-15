@@ -2,6 +2,7 @@ import base64
 import json
 import re
 import shlex
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -14,6 +15,8 @@ from services import docker_service as docker_svc
 from single_runtime import ensure_single_container
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+BRIDGE_PORT = 8799
+BRIDGE_PATH = "/tmp/hermiss_panel_chat_bridge.py"
 
 
 class ChatSendRequest(BaseModel):
@@ -65,6 +68,63 @@ def _clean_cli_output(text: str) -> str:
     return "\n".join(keep).strip()
 
 
+def _bridge_source() -> str:
+    path = Path(__file__).resolve().parents[1] / "resources" / "panel-chat-bridge" / "server.py"
+    return path.read_text(encoding="utf-8")
+
+
+def _ensure_chat_bridge(container_name: str) -> None:
+    bridge_b64 = base64.b64encode(_bridge_source().encode("utf-8")).decode("ascii")
+    command = (
+        "PYTHON_BIN=/usr/local/lib/hermes-agent/venv/bin/python3\n"
+        "[ -x \"$PYTHON_BIN\" ] || PYTHON_BIN=python3\n"
+        "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1 PYTHONIOENCODING=utf-8\n"
+        f"printf %s {shlex.quote(bridge_b64)} | base64 -d > {shlex.quote(BRIDGE_PATH)}\n"
+        f"$PYTHON_BIN - <<'PY' >/dev/null 2>&1\n"
+        "import urllib.request\n"
+        f"urllib.request.urlopen('http://127.0.0.1:{BRIDGE_PORT}/health', timeout=1).read()\n"
+        "PY\n"
+        "if [ $? -ne 0 ]; then\n"
+        f"  nohup \"$PYTHON_BIN\" {shlex.quote(BRIDGE_PATH)} >/tmp/hermiss_panel_chat_bridge.log 2>&1 &\n"
+        "  for i in $(seq 1 30); do\n"
+        f"    \"$PYTHON_BIN\" - <<'PY' >/dev/null 2>&1 && exit 0\n"
+        "import urllib.request\n"
+        f"urllib.request.urlopen('http://127.0.0.1:{BRIDGE_PORT}/health', timeout=1).read()\n"
+        "PY\n"
+        "    sleep 0.2\n"
+        "  done\n"
+        "  tail -80 /tmp/hermiss_panel_chat_bridge.log 2>/dev/null\n"
+        "  exit 1\n"
+        "fi\n"
+        "echo OK\n"
+    )
+    result = docker_svc.exec_in_container(container_name, command, timeout=15)
+    if result.get("exit_code", 1) != 0:
+        raise HTTPException(500, result.get("output") or result.get("error") or "面板聊天桥接启动失败")
+
+
+def _send_via_bridge(container_name: str, message: str) -> dict:
+    message_b64 = base64.b64encode(message.strip().encode("utf-8")).decode("ascii")
+    script = f"""
+import base64, json, urllib.request
+
+message = base64.b64decode({message_b64!r}).decode('utf-8')
+body = json.dumps({{'message': message}}, ensure_ascii=False).encode('utf-8')
+request = urllib.request.Request(
+    'http://127.0.0.1:{BRIDGE_PORT}/chat',
+    data=body,
+    headers={{'Content-Type': 'application/json; charset=utf-8'}},
+    method='POST',
+)
+try:
+    with urllib.request.urlopen(request, timeout=180) as response:
+        print(response.read().decode('utf-8'))
+except Exception as exc:
+    print(json.dumps({{'ok': False, 'error': str(exc)}}, ensure_ascii=False))
+"""
+    return _run_json_script(container_name, script, timeout=190)
+
+
 @router.get("/history")
 def chat_history(
     limit: int = 80,
@@ -109,31 +169,11 @@ def chat_send(
     db: Session = Depends(get_db),
 ):
     container_name = _container_name(user, db)
-    message_b64 = base64.b64encode(req.message.strip().encode("utf-8")).decode("ascii")
-    script = f"""
-import base64, json, subprocess
-
-message = base64.b64decode({message_b64!r}).decode('utf-8')
-try:
-    proc = subprocess.run(
-        ['hermes', '--profile', 'hermiss', '--cli', '-z', message],
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    print(json.dumps({{
-        'ok': proc.returncode == 0,
-        'exit_code': proc.returncode,
-        'stdout': proc.stdout or '',
-        'stderr': proc.stderr or '',
-    }}, ensure_ascii=False))
-except subprocess.TimeoutExpired:
-    print(json.dumps({{'ok': False, 'exit_code': 124, 'stdout': '', 'stderr': '回复超时'}}, ensure_ascii=False))
-"""
-    data = _run_json_script(container_name, script, timeout=210)
+    _ensure_chat_bridge(container_name)
+    data = _send_via_bridge(container_name, req.message)
     if not data.get("ok"):
-        raise HTTPException(500, _clean_cli_output(data.get("stderr") or data.get("stdout") or "发送失败"))
+        raise HTTPException(500, _clean_cli_output(data.get("error") or "发送失败"))
     return {
-        "reply": _clean_cli_output(data.get("stdout") or ""),
+        "reply": _clean_cli_output(data.get("reply") or ""),
         "history": chat_history(limit=80, user=user, db=db),
     }

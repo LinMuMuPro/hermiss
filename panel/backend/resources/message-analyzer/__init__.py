@@ -762,7 +762,7 @@ def register(ctx):
 
     def _on_session_start(session_id, model, platform):
         """Session start: cancel active check-in, dispatch pending reminders."""
-        if platform == "cron":
+        if platform in {"cron", "panel"}:
             return
         _cancel_checkin()
         _dispatch_reminders()
@@ -790,9 +790,10 @@ def register(ctx):
             return {"context": silence_ctx} if silence_ctx else None
 
         user_message = user_message.strip()
-        _cancel_checkin()
-        state["check_in_hours"] = 0
-        state["checkin_dirty"] = False
+        if platform != "panel":
+            _cancel_checkin()
+            state["check_in_hours"] = 0
+            state["checkin_dirty"] = False
         state["last_user_message"] = user_message
         message_time = _local_time_text()
         recent_context = _format_recent_context(conversation_history)
@@ -907,7 +908,7 @@ def register(ctx):
         A new user message cancels the previous job in pre_llm_call; this hook
         creates the replacement immediately instead of waiting for session end.
         """
-        if platform == "cron":
+        if platform in {"cron", "panel"}:
             return None
         last_user_message = str(state.get("last_user_message") or "").strip()
         if (
