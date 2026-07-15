@@ -1,7 +1,6 @@
 ﻿services:
   panel:
-    build:
-      context: ./panel
+    image: ghcr.io/linmumupro/hermiss-panel:single
     container_name: hermiss-single-panel
     restart: unless-stopped
     ports:
