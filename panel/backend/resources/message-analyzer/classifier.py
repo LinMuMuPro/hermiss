@@ -59,7 +59,7 @@ def classify_locally(message: str) -> dict | None:
         match = re.match(pattern, text)
         if match:
             name = match.group(1).strip()
-            if name and name not in {"你", "我", "自己"}:
+            if name and name not in {"你", "我", "自己", "谁", "什么", "什么角色", "哪个", "哪位"}:
                 return _classification_with_memories([
                     ("fact", "high", f"用户的名字是{name}"),
                 ])
@@ -106,15 +106,10 @@ def classify_locally(message: str) -> dict | None:
                 entry += f"第{season}季"
             local_memories.append(("fact", "low", entry))
 
-    roleplay_patterns = [
-        (r"你是(?:伊娃|EVE|eve).{0,12}我(?:就是|是)(?:瓦力|WALL[- ]?E|wall[- ]?e)", "用户把助手比作伊娃，把自己比作瓦力"),
-        (r"我(?:就是|是)(?:瓦力|WALL[- ]?E|wall[- ]?e).{0,12}你是(?:伊娃|EVE|eve)", "用户把自己比作瓦力，把助手比作伊娃"),
-        (r"^(?:那)?我(?:就是|是)(?:瓦力|WALL[- ]?E|wall[- ]?e)[。.!！?？,，、\s]*$", "用户把自己比作瓦力"),
-    ]
-    for pattern, entry in roleplay_patterns:
-        if re.search(pattern, text, re.IGNORECASE):
-            local_memories.append(("milestone", "low", entry))
-            emotion = "positive"
+    role_memories = _extract_roleplay_memories(text)
+    if role_memories:
+        local_memories.extend(("milestone", "low", item) for item in role_memories)
+        emotion = "positive"
 
     health_patterns = [
         (r"(感冒|发烧|咳嗽|头疼|头痛|胃疼|肚子疼|不舒服|难受)好了", "用户之前的不适状态已经好转"),
@@ -130,6 +125,78 @@ def classify_locally(message: str) -> dict | None:
         return _classification_with_memories(local_memories, emotion=emotion, check_in_hours=check_in_hours)
 
     return None
+
+
+def _clean_role_name(value: str) -> str:
+    import re
+
+    role = (value or "").strip()
+    role = re.sub(r"^(?:那个|这个|一?个)\s*", "", role)
+    role = role.strip(" 。.!！?？,，、；;：:（）()[]【】\"'“”‘’")
+    role = re.sub(r"(?:咯|吗|吧|呢|啦|啊|呀)$", "", role).strip()
+    if not role:
+        return ""
+    if role in {"你", "我", "自己", "谁", "什么", "哪个", "角色", "人物", "男的", "女的"}:
+        return ""
+    if any(word in role for word in ("什么", "哪个", "哪位", "谁")):
+        return ""
+    if len(role) > 24:
+        return ""
+    return role
+
+
+def _extract_roleplay_memories(text: str) -> list[str]:
+    """Extract generic relationship/role analogy memories from short user utterances."""
+    import re
+
+    source = text or ""
+    memories = []
+
+    pair_patterns = [
+        r"你(?:就是|是|当|做|像|扮演)([^，,。.!！?？；;]{1,24}).{0,16}?我(?:就是|是|当|做|像|扮演)([^，,。.!！?？；;]{1,24})",
+        r"我(?:就是|是|当|做|像|扮演)([^，,。.!！?？；;]{1,24}).{0,16}?你(?:就是|是|当|做|像|扮演)([^，,。.!！?？；;]{1,24})",
+    ]
+    for index, pattern in enumerate(pair_patterns):
+        match = re.search(pattern, source, re.IGNORECASE)
+        if not match:
+            continue
+        first = _clean_role_name(match.group(1))
+        second = _clean_role_name(match.group(2))
+        if not first or not second:
+            continue
+        if index == 0:
+            memories.append(f"用户把助手比作{first}，把自己比作{second}")
+        else:
+            memories.append(f"用户把自己比作{first}，把助手比作{second}")
+
+    self_patterns = [
+        r"^(?:那|所以|这么说|这样的话)?我(?:就是|是|当|做|像|扮演)([^，,。.!！?？；;]{1,24})[。.!！?？,，、\s]*$",
+        r"^(?:那|所以|这么说|这样的话)?我是([^，,。.!！?？；;]{1,24})[。.!！?？,，、\s]*$",
+    ]
+    for pattern in self_patterns:
+        match = re.search(pattern, source, re.IGNORECASE)
+        if not match:
+            continue
+        role = _clean_role_name(match.group(1))
+        if role:
+            memories.append(f"用户把自己比作{role}")
+
+    nickname_patterns = [
+        r"^(?:那|所以|以后)?(?:叫我|喊我|称呼我)([^，,。.!！?？；;]{1,24})[。.!！?？,，、\s]*$",
+    ]
+    for pattern in nickname_patterns:
+        match = re.search(pattern, source, re.IGNORECASE)
+        if not match:
+            continue
+        role = _clean_role_name(match.group(1))
+        if role:
+            memories.append(f"用户希望被称作{role}")
+
+    deduped = []
+    for item in memories:
+        if item not in deduped:
+            deduped.append(item)
+    return deduped
 
 
 def _classification_with_memories(
