@@ -402,7 +402,10 @@ def register(ctx):
         if explicit_activity:
             quiet_hint = (
                 "Trigger time is late night / early morning and the user may be sleeping or busy. "
-                "Do not guess the user is awake. Do not ask what they are doing. Keep it very light."
+                "Do not guess the user is awake. Do not ask any question, including what they are doing, "
+                "how the activity went, work/study progress, or whether they are okay. "
+                "Send only a soft non-demanding message that expresses missing, warmth, or quiet companionship, "
+                "and make it comfortable to read later."
             )
             return target_dt_utc, quiet_hint, False
         next_local = local_dt.replace(hour=end_hour, minute=30, second=0, microsecond=0)
@@ -716,9 +719,10 @@ def register(ctx):
             f"Use it only as emotional background, then send a current, non-jarring check-in such as asking how the rest of their day/evening went. "
             f"Avoid words like '刚才', '刚刚', '还', or any phrasing that implies the old message happened moments ago.\n\n"
             f"If trigger_local_time is late night or early morning and there is no explicit evidence the user is awake, assume they may be sleeping or will see it later. "
+            f"During late night or early morning, do NOT ask any question at all. Do not ask what they are doing, how work/study went, progress/result, or whether they are okay. "
             f"Do NOT say '醒了吗', '这么早就醒了', '还没睡', or imply the user is awake. "
-            f"If the user was doing a specific activity where they may not look at the phone (for example exam, class, gym, workout, study, work, meeting, driving, shower, sleep/rest, movie/show, travel, or going out), do NOT ask 'what are you doing'. "
-            f"Instead ask gently about progress, result, how it went, or whether they are okay. "
+            f"Send a non-demanding message that can be read later: express missing, warmth, quiet companionship, or a soft good-night style feeling. Avoid question marks. "
+            f"If the user was doing a specific activity where they may not look at the phone (for example exam, class, gym, workout, study, work, meeting, driving, shower, sleep/rest, movie/show, travel, or going out), only ask about progress/result when trigger_local_time is NOT late night or early morning. "
             f"If there is no specific activity in context and the time is not a sleep/quiet hour, ask what they are up to now in a casual caring way.\n\n"
             f"Reality boundary: do not claim you performed physical actions in the user's room; "
             f"phrase reminders as suggestions or gentle imagined companionship unless the user explicitly roleplays it. "
