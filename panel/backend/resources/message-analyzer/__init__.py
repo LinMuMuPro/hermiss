@@ -515,18 +515,31 @@ def register(ctx):
         importance = result.get("importance", "low")
         emotion = result.get("emotion", "neutral")
 
-        if memory_type != "none" and memory_entry:
+        memory_items = result.get("memories") or []
+        if not memory_items and memory_type != "none" and memory_entry:
+            memory_items = [{
+                "memory": memory_type,
+                "memory_entry": memory_entry,
+                "importance": importance,
+            }]
+
+        for item in memory_items:
+            item_type = item.get("memory", "none")
+            item_entry = item.get("memory_entry", "")
+            item_importance = item.get("importance", importance)
+            if item_type == "none" or not item_entry:
+                continue
             memory_id = db.insert_memory(
-                entry=memory_entry,
-                category=memory_type,
-                importance=importance,
+                entry=item_entry,
+                category=item_type,
+                importance=item_importance,
                 emotion=emotion,
                 source_msg=source_msg,
             )
             if memory_id:
-                print(f"[message-analyzer] Stored {memory_type}: {memory_entry[:60]}")
+                print(f"[message-analyzer] Stored {item_type}: {item_entry[:60]}")
             else:
-                print(f"[message-analyzer] Memory deduped: {memory_entry[:60]}")
+                print(f"[message-analyzer] Memory deduped: {item_entry[:60]}")
 
         if emotion in EMOTION_INJECTIONS:
             state["last_emotion"] = emotion
