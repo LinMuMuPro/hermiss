@@ -661,6 +661,8 @@ def register(ctx):
 
         # Build the self-contained proactive reply prompt.
         memory_context = build_full_context(db, "__CHECKIN__")
+        transcript_block = recent_context_with_time or recent_context or "(no recent transcript captured)"
+        last_activity_block = last_activity_hint or "(no latest user activity captured)"
         prompt = (
             f"[HERMES PROACTIVE REPLY]\n\n"
             f"Read the active_checkin.json file at {cf}. If cancelled=true, "
@@ -673,7 +675,9 @@ def register(ctx):
             f"Before writing, infer what the user is most likely doing from recent_context_with_time, last_activity_hint, "
             f"last_user_message_at, trigger_local_time, and the time gap. Use this inference silently; do not explain it. "
             f"Do not infer exact phrases like 'earlier today', 'yesterday', or 'the day before yesterday' unless explicit timestamps prove it.\n\n"
-            f"Use recent_context_with_time as the primary transcript. Use last_activity_hint only as a short summary of the latest user activity. "
+            f"Use recent_context_with_time as the primary transcript. Use last_activity_hint only as a short summary of the latest user activity.\n\n"
+            f"recent_context_with_time:\n{transcript_block}\n\n"
+            f"last_activity_hint:\n{last_activity_block}\n\n"
             f"Scene strategy: {style_hint}\n\n"
             f"If trigger_local_time is late night or early morning and there is no explicit evidence the user is awake, assume they may be sleeping or will see it later. "
             f"Do NOT say '醒了吗', '这么早就醒了', '还没睡', or imply the user is awake. "
