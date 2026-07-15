@@ -351,6 +351,14 @@ def register(ctx):
             content = " ".join(content.split())
             if not content:
                 continue
+            if role == "tool":
+                continue
+            if content.startswith("[IMPORTANT: You are running as a scheduled cron job"):
+                continue
+            if content in {"[SILENT]", "定时任务测试已触发。"}:
+                continue
+            if "active_checkin.json" in content or "HERMES PROACTIVE REPLY" in content:
+                continue
             if len(content) > 180:
                 content = content[:177] + "..."
             if with_time:
@@ -411,7 +419,7 @@ def register(ctx):
     def _activity_style_hint(text: str) -> tuple[str, int]:
         source = (text or "").lower()
         if re.search(r"你不开心|你开心吗|你生气|你难过|你怎么了|你还好吗|你是不是.*不高兴|你是不是.*委屈", source):
-            return "用户在关心你或确认你的情绪；主动消息要先回应这份关心，不要编造自己刚才做了什么，也不要生硬转去问用户在干什么。", 3
+            return "用户在关心你或确认你的情绪；如果主动触发距离这句话已经较久，不要像即时聊天一样直接回答旧问题，要把它当成关系氛围，转成自然的当前关心。不要编造自己刚才做了什么，也不要生硬转去问用户在干什么。", 3
         if re.search(r"睡|晚安|困了|休息|躺下|熬不住", source):
             return "用户可能在休息或准备睡觉；主动消息要轻，不要追问在干什么，可像醒后/休息后的温柔关心。", 8
         if re.search(r"考试|考场|面试|开会|会议|上课|课堂|健身|锻炼|跑步|游泳|开车|骑车|地铁|高铁|飞机|洗澡|看电影|看剧|出门|上班|工作|加班|学习|写作业|复习", source):
@@ -458,10 +466,31 @@ def register(ctx):
         except Exception:
             return False
 
+    def _ensure_weixin_home_channel(chat_id: str) -> None:
+        """Hermes send/cron delivery needs WEIXIN_HOME_CHANNEL even with a concrete target."""
+        chat_id = (chat_id or "").strip()
+        if not chat_id:
+            return
+        config_path = hermes_home / "config.yaml"
+        try:
+            text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+            line = f"WEIXIN_HOME_CHANNEL: {chat_id}"
+            if re.search(r"(?m)^WEIXIN_HOME_CHANNEL:\s*", text):
+                new_text = re.sub(r"(?m)^WEIXIN_HOME_CHANNEL:\s*.*$", line, text)
+            else:
+                new_text = (text.rstrip() + "\n" + line + "\n").lstrip()
+            if new_text != text:
+                config_path.write_text(new_text, encoding="utf-8")
+                print(f"[message-analyzer] WEIXIN_HOME_CHANNEL set: {chat_id}")
+        except Exception as e:
+            print(f"[message-analyzer] set WEIXIN_HOME_CHANNEL failed: {e}")
+
     def _resolve_deliver_target() -> str:
         """Resolve platform-only delivery like 'weixin' to a concrete chat target."""
         configured = (deliver or "").strip() or "weixin"
         if configured in {"local", "origin"} or ":" in configured:
+            if configured.startswith("weixin:"):
+                _ensure_weixin_home_channel(configured.split(":", 1)[1])
             return configured
         if configured == "weixin":
             try:
@@ -470,6 +499,7 @@ def register(ctx):
                 for entry in directory.get("platforms", {}).get("weixin", []):
                     chat_id = str(entry.get("id") or "").strip()
                     if chat_id:
+                        _ensure_weixin_home_channel(chat_id)
                         return f"weixin:{chat_id}"
             except Exception as e:
                 print(f"[message-analyzer] resolve weixin deliver target failed: {e}")
@@ -663,6 +693,7 @@ def register(ctx):
         memory_context = build_full_context(db, "__CHECKIN__")
         transcript_block = recent_context_with_time or recent_context or "(no recent transcript captured)"
         last_activity_block = last_activity_hint or "(no latest user activity captured)"
+        context_age_hint = f"about {check_in_hours} hour(s)"
         prompt = (
             f"[HERMES PROACTIVE REPLY]\n\n"
             f"Read the active_checkin.json file at {cf}. If cancelled=true, "
@@ -671,7 +702,8 @@ def register(ctx):
             f"Do not mention how many hours passed, do not say 'you have not messaged', and do not sound like monitoring.\n\n"
             f"Current local time when this proactive job was scheduled: {local_time}. "
             f"Actual local trigger time for this message: {trigger_local_time}. "
-            f"Last user message local time: {last_user_message_at or 'unknown'}.\n\n"
+            f"Last user message local time: {last_user_message_at or 'unknown'}. "
+            f"The latest user context is {context_age_hint} old by design.\n\n"
             f"Before writing, infer what the user is most likely doing from recent_context_with_time, last_activity_hint, "
             f"last_user_message_at, trigger_local_time, and the time gap. Use this inference silently; do not explain it. "
             f"Do not infer exact phrases like 'earlier today', 'yesterday', or 'the day before yesterday' unless explicit timestamps prove it.\n\n"
@@ -679,6 +711,10 @@ def register(ctx):
             f"recent_context_with_time:\n{transcript_block}\n\n"
             f"last_activity_hint:\n{last_activity_block}\n\n"
             f"Scene strategy: {style_hint}\n\n"
+            f"Stale-context rule: because proactive replies normally happen after a long silence, do NOT continue the old exchange as if it is still live. "
+            f"If the last user message was a direct question to you, an emotion check, or a short temporary remark, do not answer it as if it was just asked. "
+            f"Use it only as emotional background, then send a current, non-jarring check-in such as asking how the rest of their day/evening went. "
+            f"Avoid words like '刚才', '刚刚', '还', or any phrasing that implies the old message happened moments ago.\n\n"
             f"If trigger_local_time is late night or early morning and there is no explicit evidence the user is awake, assume they may be sleeping or will see it later. "
             f"Do NOT say '醒了吗', '这么早就醒了', '还没睡', or imply the user is awake. "
             f"If the user was doing a specific activity where they may not look at the phone (for example exam, class, gym, workout, study, work, meeting, driving, shower, sleep/rest, movie/show, travel, or going out), do NOT ask 'what are you doing'. "
