@@ -2,16 +2,16 @@
 Message Analyzer Plugin — Hermes 消息分析引擎 v1.0
 
 四步流水线（通过 Hermes plugin hook 架构实现）：
-  Step 1 (pre_llm_call): 独立分类 → 存记忆 / 情绪标记 / check-in 决策 → 返回 context dict
-  Step 2 (pre_llm_call): SQLite 宽口径粗筛记忆 → 拼入 context
-  Step 3 (pre_llm_call): 注入到 user message（context 字段被 Hermes 注入到用户消息末尾）
-  Step 4 (post_llm_call): 每轮回复后刷新主动回复 cron job
+  Step 1 (pre_llm_call): 取消上一轮 check-in → SQLite/Milvus 检索记忆 → 拼入 context
+  Step 2 (pre_llm_call): 注入规则/记忆/context 到 user message
+  Step 3 (post_llm_call): 立即放行回复发送
+  Step 4 (background): 回复发送链路放行后，异步分类 → 写记忆 → 创建下一轮 proactive reply cron job
 
 Hermes hook 架构（v1.0）：
   - pre_llm_call 返回 {"context": "..."} → Hermes 注入到用户消息末尾
-  - transform_llm_output 接收 LLM 回复 → 解析并剥离 <hermes_classify> → 返回清理后文本
+  - transform_llm_output 接收 LLM 回复 → 解析并剥离兼容旧内联模式的 <hermes_classify>
   - pre_llm_call 收到新用户消息时取消上一轮 check-in cron job
-  - post_llm_call 根据本轮分类结果立即创建下一轮 proactive reply cron job
+  - post_llm_call 启动后台分析线程，不阻塞微信回复发送
   - 不再直接修改 conversation_history（Hermes 传的是副本，修改无效）
 
 依赖 Hermes v0.13.0+（需要 transform_llm_output hook）
@@ -508,7 +508,7 @@ def register(ctx):
             print(f"[message-analyzer] classify_via_llm failed: {e}")
             return None
 
-    def _execute_classification(result: dict, source_msg: str):
+    def _execute_classification(result: dict, source_msg: str, allow_checkin: bool = True):
         """Execute actions from classification result."""
         memory_type = result.get("memory", "none")
         memory_entry = result.get("memory_entry", "")
@@ -554,6 +554,11 @@ def register(ctx):
 #                     print(f"[message-analyzer] Reminder: {reminder_text} @ {reminder_time}")
 #                     _dispatch_reminders()
 # 
+        if not allow_checkin:
+            state["check_in_hours"] = 0
+            state["checkin_dirty"] = False
+            return
+
         # ── Check-in scheduling ────────────────────────────
         check_in_hours = result.get("check_in_hours", 0)
         if not _env_bool("HERMISS_PROACTIVE_CHECKIN_ENABLED", True):
@@ -758,6 +763,63 @@ def register(ctx):
             "Don't make it sound like you're monitoring them."
         )
 
+    def _post_reply_analysis(
+        *,
+        session_id,
+        user_message: str,
+        conversation_history,
+        model,
+        platform: str,
+    ):
+        """Run memory classification and proactive scheduling after reply generation.
+
+        This is intentionally invoked from a daemon thread in post_llm_call so
+        the gateway can send the assistant reply without waiting for the memory
+        classifier LLM call.
+        """
+        try:
+            if platform == "cron":
+                return
+            source_msg = str(user_message or "").strip()
+            if not source_msg or source_msg.startswith("/"):
+                return
+
+            print(f"[message-analyzer] async classify start: '{source_msg[:60]}'", flush=True)
+            result = classify_locally(source_msg)
+            if result:
+                print(f"[message-analyzer] local classify: {result}", flush=True)
+            elif state["can_classify"]:
+                result = _classify_via_llm(source_msg, conversation_history)
+            else:
+                result = None
+
+            if result:
+                _execute_classification(
+                    result,
+                    source_msg,
+                    allow_checkin=(platform != "panel"),
+                )
+
+            if platform == "panel":
+                return
+
+            if (
+                source_msg
+                and not source_msg.startswith("/")
+                and not state.get("checkin_dirty")
+                and _env_bool("HERMISS_PROACTIVE_CHECKIN_ENABLED", True)
+            ):
+                state["check_in_hours"] = _choose_checkin_hours()
+                state["checkin_dirty"] = True
+                print(
+                    "[message-analyzer] Check-in refresh requested: "
+                    f"{state['check_in_hours']}h (adaptive)"
+                )
+            if state.get("checkin_dirty"):
+                _schedule_checkin()
+        except Exception as e:
+            print(f"[message-analyzer] async post-reply analysis failed: {e}", flush=True)
+
     # ── Hook Handlers ───────────────────────────────────────────
 
     def _on_session_start(session_id, model, platform):
@@ -818,41 +880,21 @@ def register(ctx):
         state["message_count"] += 1
         print(f"[message-analyzer] pre_llm_call: '{user_message[:60]}'")
         context_parts = [REALITY_BOUNDARY_CONTEXT]
-        classify_instruction = ""
 
-        # ── Step 1: Classify ──────────────────────────────────
-        local_classification = classify_locally(user_message)
-        if local_classification:
-            print(f"[message-analyzer] local classify: {local_classification}", flush=True)
-            _execute_classification(local_classification, user_message)
-        elif state["can_classify"]:
-            classification = _classify_via_llm(user_message, conversation_history)
-            if classification:
-                _execute_classification(classification, user_message)
-        else:
-            # Inline mode: inject classify instruction into context
-            classify_instruction = build_classify_prompt(user_message, recent_context=_format_recent_context(conversation_history))
-            state["classify_inline"] = True
-            print(f"[message-analyzer] inline classify active, len={len(classify_instruction)}", flush=True)
-
-        # ── Step 2: Retrieve memories ─────────────────────────
+        # ── Step 1: Retrieve memories before the main reply ─────
         memory_context = build_full_context(db, user_message)
         if memory_context:
             context_parts.append(memory_context)
 
-        # ── Step 3: Emotion guidance from previous turn ───────
+        # ── Step 2: Emotion guidance from previous completed analysis ─
         if state["last_emotion"] in EMOTION_INJECTIONS:
             context_parts.append(EMOTION_INJECTIONS[state["last_emotion"]])
             state["last_emotion"] = None
 
-        # ── Step 4: Silence check (before recording activity) ─
+        # ── Step 3: Silence check (before recording activity) ─
         silence_ctx = _build_silence_context(user_id)
         if silence_ctx:
             context_parts.append(silence_ctx)
-
-        # ── Step 5: Classify instruction (inline mode) ────────
-        if classify_instruction:
-            context_parts.append(classify_instruction)
 
         record_user_activity(user_id)
 
@@ -903,28 +945,26 @@ def register(ctx):
         session_id, user_message, assistant_response,
         conversation_history, model, platform
     ):
-        """
-        Post-LLM hook: refresh proactive reply after each completed reply.
-        A new user message cancels the previous job in pre_llm_call; this hook
-        creates the replacement immediately instead of waiting for session end.
-        """
-        if platform in {"cron", "panel"}:
+        """Post-LLM hook: launch non-blocking memory analysis/check-in work."""
+        if platform == "cron":
             return None
-        last_user_message = str(state.get("last_user_message") or "").strip()
-        if (
-            last_user_message
-            and not last_user_message.startswith("/")
-            and not state.get("checkin_dirty")
-            and _env_bool("HERMISS_PROACTIVE_CHECKIN_ENABLED", True)
-        ):
-            state["check_in_hours"] = _choose_checkin_hours()
-            state["checkin_dirty"] = True
-            print(
-                "[message-analyzer] Check-in refresh requested: "
-                f"{state['check_in_hours']}h (adaptive)"
-            )
-        if state.get("checkin_dirty"):
-            _schedule_checkin()
+        try:
+            history_snapshot = list(conversation_history or [])
+        except Exception:
+            history_snapshot = conversation_history
+        t = threading.Thread(
+            target=_post_reply_analysis,
+            kwargs={
+                "session_id": session_id,
+                "user_message": user_message,
+                "conversation_history": history_snapshot,
+                "model": model,
+                "platform": platform,
+            },
+            daemon=True,
+            name=f"message-analyzer-post-{session_id}",
+        )
+        t.start()
         return None
 
     def _post_tool_call(
