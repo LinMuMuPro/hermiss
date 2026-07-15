@@ -272,9 +272,9 @@
 }
 
 .chat-message.user .chat-bubble {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  color: var(--text);
 }
 
 .chat-meta {
@@ -288,17 +288,49 @@
 }
 
 .chat-message.user .chat-meta {
-  color: rgba(255,255,255,.76);
+  color: var(--text3);
 }
 
-.chat-meta span {
+.chat-speaker {
   font-weight: 650;
+}
+
+.chat-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-copy {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text3);
+  cursor: pointer;
+  font: inherit;
+  font-size: .72rem;
+  line-height: 1;
+  padding: 4px 7px;
+  opacity: .68;
+  transition: background .16s ease, border-color .16s ease, color .16s ease, opacity .16s ease;
+}
+
+.chat-bubble:hover .chat-copy,
+.chat-copy:focus-visible {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
+  color: var(--accent);
+  opacity: 1;
+  outline: none;
 }
 
 .chat-text {
   font-size: .94rem;
   line-height: 1.7;
   word-break: break-word;
+  user-select: text;
 }
 
 .chat-compose {

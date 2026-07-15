@@ -6,6 +6,8 @@ const chatEscapeHtml = value => String(value ?? '')
   .replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;');
 
+const chatEscapeAttr = value => chatEscapeHtml(value).replace(/'/g, '&#39;');
+
 function chatFormatTime(value) {
   if (!value) return '';
   const date = new Date(Number(value) * 1000);
@@ -26,13 +28,17 @@ function renderChatMessages(messages = []) {
   return messages.map(item => {
     const role = item.role === 'user' ? 'user' : 'assistant';
     const label = role === 'user' ? '你' : 'Hermiss';
-    const content = chatEscapeHtml(item.content || '').replace(/\n/g, '<br>');
+    const rawContent = String(item.content || '');
+    const content = chatEscapeHtml(rawContent).replace(/\n/g, '<br>');
     return `
       <article class="chat-message ${role}">
         <div class="chat-bubble">
           <div class="chat-meta">
-            <span>${label}</span>
-            <time>${chatEscapeHtml(chatFormatTime(item.timestamp))}</time>
+            <span class="chat-speaker">${label}</span>
+            <div class="chat-actions">
+              <time>${chatEscapeHtml(chatFormatTime(item.timestamp))}</time>
+              <button class="chat-copy" type="button" data-copy="${chatEscapeAttr(rawContent)}" aria-label="复制这条消息">复制</button>
+            </div>
           </div>
           <div class="chat-text">${content}</div>
         </div>
@@ -72,6 +78,33 @@ window.Pages.chat = async function(el) {
   `;
 
   await loadChatHistory();
+
+  const history = document.getElementById('chat-history');
+  history?.addEventListener('click', async event => {
+    const button = event.target.closest('.chat-copy');
+    if (!button) return;
+    const text = button.dataset.copy || '';
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
+      }
+      button.textContent = '已复制';
+      toast('已复制消息', 'ok');
+      setTimeout(() => { button.textContent = '复制'; }, 1200);
+    } catch (e) {
+      toast('复制失败，请手动选择文本', 'err');
+    }
+  });
 
   document.getElementById('btn-chat-refresh')?.addEventListener('click', async () => {
     try {
