@@ -39,14 +39,8 @@ window.Pages.settings = async function(el) {
         </div>
       ` : `
         <div class="btn-group" style="margin-top:12px">
-          <button class="btn" id="btn-settings-pairing-list">查看配对请求</button>
           <button class="btn" id="btn-settings-connection-test">连接测试</button>
           <button class="btn btn-danger" id="btn-settings-unbind">解绑微信</button>
-        </div>
-        <div class="card compact-card" id="settings-pairing-card" style="display:none;margin-top:12px">
-          <h3>配对请求</h3>
-          <div id="settings-pairing-content" class="log-view">点击「查看配对请求」加载</div>
-          <button class="btn btn-primary btn-sm" id="btn-settings-approve" style="margin-top:10px">审批配对码</button>
         </div>
         <div class="card compact-card" id="settings-conn-test-card" style="display:none;margin-top:12px">
           <h3>连接测试</h3>
@@ -73,7 +67,7 @@ window.Pages.settings = async function(el) {
         <div class="form-group">
           <label>Provider</label>
           <select id="set-provider">
-            <option value="deepseek" data-url="https://api.deepseek.com/v1" data-model="deepseek-chat">DeepSeek</option>
+            <option value="deepseek" data-url="https://api.deepseek.com/v1" data-model="deepseek-v4-flash">DeepSeek</option>
             <option value="openai" data-url="https://api.openai.com/v1" data-model="gpt-4o">OpenAI</option>
             <option value="custom" data-url="" data-model="">自定义 / 中转站</option>
           </select>
@@ -84,7 +78,7 @@ window.Pages.settings = async function(el) {
         </div>
         <div class="form-group">
           <label>Model</label>
-          <input id="set-model" value="deepseek-chat" placeholder="gpt-4o / deepseek-chat">
+          <input id="set-model" value="deepseek-v4-flash" placeholder="deepseek-v4-flash / gpt-4o">
         </div>
         <div class="form-group">
           <label>API Key</label>
@@ -205,7 +199,7 @@ window.Pages.settings = async function(el) {
   // ── 用已保存的配置初始化表单 ──
   if (model) {
     document.getElementById('set-provider').value = model.provider || 'deepseek';
-    document.getElementById('set-model').value = model.model || 'deepseek-chat';
+    document.getElementById('set-model').value = model.model || 'deepseek-v4-flash';
     document.getElementById('set-base-url').value = model.base_url || 'https://api.deepseek.com/v1';
   }
   if (vision) {
@@ -288,22 +282,6 @@ window.Pages.settings = async function(el) {
     }
   });
 
-  document.getElementById('btn-settings-pairing-list')?.addEventListener('click', async () => {
-    try {
-      const data = await api('/api/wechat/pairing');
-      document.getElementById('settings-pairing-card').style.display = '';
-      document.getElementById('settings-pairing-content').textContent = data.output || '(无配对请求)';
-    } catch (e) { toast(e.message, 'err'); }
-  });
-
-  document.getElementById('btn-settings-approve')?.addEventListener('click', async () => {
-    const code = await dialogPrompt('输入配对码');
-    if (!code) return;
-    try {
-      const data = await api('/api/wechat/pairing/approve', { method: 'POST', body: JSON.stringify({ code }) });
-      toast(data.output || '审批完成', 'ok');
-    } catch (e) { toast(e.message, 'err'); }
-  });
 
   document.getElementById('btn-settings-connection-test')?.addEventListener('click', async () => {
     try {
@@ -313,7 +291,8 @@ window.Pages.settings = async function(el) {
       document.getElementById('settings-conn-test-result').innerHTML = `
         <div class="inline-status">
           <span class="dot ${data.connected ? 'dot-ok' : 'dot-err'}"></span>
-          <span>${data.connected ? 'Connected' : 'Disconnected'}</span>
+          <span>${data.connected ? '已连接' : '未连接'}</span>
+          <span class="badge badge-neutral">${data.state || 'unknown'}</span>
         </div>
         <div class="log-view">${data.log || '(无日志)'}</div>`;
     } catch (e) { toast(e.message, 'err'); }

@@ -73,6 +73,9 @@ def get_admin_user(token: str = Depends(get_token), db: Session = Depends(get_db
 
 @router.post("/register")
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    if SINGLE_USER_MODE:
+        raise HTTPException(403, "单用户版本不开放注册")
+
     """注册 -> 进入审批队列"""
     if db.query(User).filter(User.email == req.email).first():
         raise HTTPException(400, "该邮箱已注册")

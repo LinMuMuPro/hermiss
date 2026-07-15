@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Header
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-import secrets, threading, time, base64, io, requests
+import secrets, threading, time, base64, io, json, requests
 
 import qrcode, qrcode.image.svg
 
@@ -110,11 +110,68 @@ def wechat_qr_status(qr_id: str, token: str = Depends(get_token), db: Session = 
                 _qr_store[qr_id]["account_id"] = account_id
 
         return {"status": "confirmed", "account_id": account_id}
+
+def _container_wechat_health(user: User) -> dict:
+    if MOCK_MODE:
+        return {"connected": bool(user.wechat_bound), "state": "mock", "log": "mock mode"}
+    if not user.container_id:
+        return {"connected": False, "state": "no_container", "log": "container not created"}
+
+    from services import docker_service as docker_svc
+
+    env_text = docker_svc.read_file(user.container_id, "/root/.hermes/profiles/hermiss/.env")
+    env_values = {}
+    for line in env_text.splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            key, value = line.split("=", 1)
+            env_values[key.strip()] = value.strip()
+
+    state_raw = docker_svc.read_file(user.container_id, "/root/.hermes/profiles/hermiss/gateway_state.json")
+    gateway = {}
+    try:
+        gateway = json.loads(state_raw or "{}")
+    except Exception:
+        gateway = {}
+    weixin = (gateway.get("platforms") or {}).get("weixin") or {}
+    platform_state = str(weixin.get("state") or "unknown")
+    error_message = weixin.get("error_message") or weixin.get("error_code") or ""
+    token_ok = bool(env_values.get("WEIXIN_TOKEN"))
+    account_id = env_values.get("WEIXIN_ACCOUNT_ID") or user.wechat_account_id or ""
+    connected = token_ok and platform_state == "connected"
+
+    log = docker_svc.read_file(user.container_id, "/root/.hermes/profiles/hermiss/logs/gateway.log")
+    interesting = []
+    for line in log.splitlines()[-160:]:
+        lower = line.lower()
+        if any(key in lower for key in ("weixin", "ilink", "session", "token", "error", "connected", "disconnected")):
+            interesting.append(line)
+    return {
+        "connected": connected,
+        "state": platform_state,
+        "account_id": account_id,
+        "token_configured": token_ok,
+        "gateway_state": gateway.get("gateway_state") or "unknown",
+        "updated_at": weixin.get("updated_at") or gateway.get("updated_at") or "",
+        "error": str(error_message or ""),
+        "log": "\n".join(interesting[-30:]) or "暂无微信连接日志",
+    }
+
+
 @router.get("/status")
 def wechat_status(token: str = Depends(get_token), db: Session = Depends(get_db)):
     user = get_current_user(token, db)
-    return {"bound": user.wechat_bound, "account_id": user.wechat_account_id or "",
-            "container_status": user.container_status or "unknown"}
+    health = _container_wechat_health(user)
+    bound = bool(user.wechat_bound and health.get("token_configured"))
+    return {
+        "bound": bound,
+        "account_id": health.get("account_id") or user.wechat_account_id or "",
+        "container_status": user.container_status or "unknown",
+        "connected": bool(health.get("connected")),
+        "connection_state": health.get("state") or "unknown",
+        "gateway_state": health.get("gateway_state") or "unknown",
+        "updated_at": health.get("updated_at") or "",
+        "error": health.get("error") or "",
+    }
 
 
 @router.post("/bind")
@@ -159,14 +216,24 @@ def unbind_wechat(token: str = Depends(get_token), db: Session = Depends(get_db)
 
 @router.get("/pairing")
 def list_pairing(token: str = Depends(get_token), db: Session = Depends(get_db)):
-    return {"pairings": []}
+    raise HTTPException(410, "single-user edition only supports QR binding")
 
 
 @router.post("/pairing/approve")
 def approve_pairing(req: PairingApproveRequest, token: str = Depends(get_token), db: Session = Depends(get_db)):
-    return {"status": "approved"}
+    raise HTTPException(410, "single-user edition only supports QR binding")
 
 
 @router.get("/connection-test")
 def test_connection(token: str = Depends(get_token), db: Session = Depends(get_db)):
-    return {"status": "ok", "message": "连接正常"}
+    user = get_current_user(token, db)
+    health = _container_wechat_health(user)
+    return {
+        "connected": bool(health.get("connected")),
+        "status": "ok" if health.get("connected") else "error",
+        "state": health.get("state") or "unknown",
+        "account_id": health.get("account_id") or "",
+        "message": "Weixin connected" if health.get("connected") else "Weixin disconnected or credential expired",
+        "log": health.get("log") or "",
+        "error": health.get("error") or "",
+    }

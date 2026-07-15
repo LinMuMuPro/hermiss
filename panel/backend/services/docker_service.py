@@ -6,6 +6,7 @@ import re
 import shlex
 import tarfile
 import time
+import json
 from pathlib import Path
 from typing import Optional
 from config import DOCKER_IMAGE
@@ -95,28 +96,22 @@ def ensure_milvus_service() -> dict:
     return {"name": MILVUS_CONTAINER, "status": container.status}
 
 
-def _install_memory_vector_dependencies(container_name: str) -> None:
+def _check_memory_vector_dependencies(container_name: str) -> None:
     result = exec_in_container(
         container_name,
         "PYTHON_BIN=/usr/local/lib/hermes-agent/venv/bin/python3\n"
         "[ -x \"$PYTHON_BIN\" ] || PYTHON_BIN=python3\n"
         "$PYTHON_BIN - <<'PY'\n"
-        "import subprocess, sys\n"
-        "try:\n"
-        "    import pkg_resources  # noqa: F401\n"
-        "    import pymilvus  # noqa: F401\n"
-        "except Exception:\n"
-        "    subprocess.check_call([\n"
-        "        sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '--force-reinstall',\n"
-        "        'setuptools<81', 'protobuf==5.29.5', 'grpcio==1.67.1', 'pymilvus==2.4.10'\n"
-        "    ])\n"
-        "print('OK', sys.executable)\n"
+        "import pymilvus  # noqa: F401\n"
+        "print('OK')\n"
         "PY",
-        timeout=180,
+        timeout=30,
     )
     if result.get("exit_code", 1) != 0:
-        print(f"[panel] install pymilvus failed for {container_name}: {result.get('output', '')}")
-
+        print(
+            f"[panel] pymilvus missing in {container_name}; "
+            "please rebuild/pull a Hermiss image with vector dependencies preinstalled."
+        )
 
 def _install_message_analyzer_plugin(container_name: str) -> None:
     resource_dir = Path(__file__).resolve().parents[1] / "resources" / "message-analyzer"
@@ -169,7 +164,7 @@ def ensure_memory_vector_stack(container_name: str) -> None:
         update_env(container_name, memory_vector_env(container_name))
     except Exception as e:
         print(f"[panel] update vector env failed for {container_name}: {e}")
-    _install_memory_vector_dependencies(container_name)
+    _check_memory_vector_dependencies(container_name)
     _install_message_analyzer_plugin(container_name)
 
 
@@ -299,24 +294,37 @@ def copy_dir_to_container(container_name: str, local_dir: str, target_dir: str) 
     container.put_archive(parent, buffer.getvalue())
 
 
+def _clean_env_key(key: str) -> str:
+    key = str(key or "").strip()
+    if not re.fullmatch(r"[A-Z0-9_]+", key):
+        raise ValueError(f"invalid env key: {key!r}")
+    return key
+
+
+def _clean_env_value(value) -> str:
+    text = "" if value is None else str(value)
+    return text.replace("\r", "").replace("\n", "").strip()
+
+
 def update_env(container_name: str, updates: dict) -> None:
-    """合并式更新 .env，保留已有的其他行"""
-    env_path = f"/root/.hermes/profiles/hermiss/.env"
+    """Merge updates into the profile .env without allowing malformed lines."""
+    env_path = "/root/.hermes/profiles/hermiss/.env"
+    normalized = {_clean_env_key(key): _clean_env_value(value) for key, value in updates.items()}
     current = read_file(container_name, env_path)
     lines = current.strip().split(chr(10)) if current.strip() else []
 
     updated, found_keys = [], set()
     for line in lines:
-        matched = False
-        for key, val in updates.items():
-            if line.startswith(f"{key}="):
-                updated.append(f"{key}={val}")
-                found_keys.add(key)
-                matched = True
-                break
-        if not matched:
+        if "=" not in line or line.lstrip().startswith("#"):
             updated.append(line)
-    for key, val in updates.items():
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key in normalized:
+            updated.append(f"{key}={normalized[key]}")
+            found_keys.add(key)
+        else:
+            updated.append(line)
+    for key, val in normalized.items():
         if key not in found_keys:
             updated.append(f"{key}={val}")
 

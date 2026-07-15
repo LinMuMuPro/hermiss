@@ -58,7 +58,7 @@ if (!(Test-Path ".env")) {
     "PANEL_PORT=8788"
     "PANEL_USERNAME=hermiss"
     "PANEL_PASSWORD=hermiss"
-    "SECRET_KEY=change-me-hermiss-single-user"
+    "SECRET_KEY=$([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48)))"
     "HERMISS_CONTAINER=hermiss-single"
     "HERMISS_CONTAINER_PORT=8770"
     "DOCKER_IMAGE=ghcr.io/linmumupro/hermiss:single"

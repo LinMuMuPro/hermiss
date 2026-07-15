@@ -95,6 +95,52 @@ def _exec_write(container_id: str, sql: str, *, timeout: int = 10) -> None:
         raise HTTPException(500, "数据库操作失败：" + result.get("output", ""))
 
 
+def _sync_vector_store(container_id: str, *, upsert_ids: list[int] | None = None, delete_ids: list[int] | None = None, clear: bool = False) -> None:
+    upsert_ids = [int(item) for item in (upsert_ids or []) if int(item) > 0]
+    delete_ids = [int(item) for item in (delete_ids or []) if int(item) > 0]
+    payload = base64.b64encode(json.dumps({
+        "upsert_ids": upsert_ids,
+        "delete_ids": delete_ids,
+        "clear": bool(clear),
+    }).encode("utf-8")).decode("ascii")
+    script = """
+import base64, importlib.util, json, sys
+from pathlib import Path
+payload = json.loads(base64.b64decode("__PAYLOAD__").decode("utf-8"))
+plugin_dir = Path("/root/.hermes/profiles/hermiss/plugins/message-analyzer")
+spec = importlib.util.spec_from_file_location(
+    "message_analyzer",
+    plugin_dir / "__init__.py",
+    submodule_search_locations=[str(plugin_dir)],
+)
+module = importlib.util.module_from_spec(spec)
+sys.modules["message_analyzer"] = module
+spec.loader.exec_module(module)
+from message_analyzer.db import MemoryDB
+memory_db = MemoryDB(Path("/root/.hermes/profiles/hermiss/memory/hermes_memory.db"))
+store = memory_db.vector_store
+if store and store.available():
+    if payload.get("clear"):
+        store._collection.delete(f'profile == "{store.profile}"')
+        store._collection.flush()
+    for memory_id in payload.get("delete_ids") or []:
+        memory_db._delete_vector(int(memory_id))
+    if payload.get("upsert_ids"):
+        with memory_db._conn() as conn:
+            for memory_id in payload.get("upsert_ids") or []:
+                memory_db._upsert_vector_by_id(conn, int(memory_id))
+print("OK")
+""".replace("__PAYLOAD__", payload)
+    encoded = base64.b64encode(script.encode("utf-8")).decode("ascii")
+    result = docker_svc.exec_in_container(
+        container_id,
+        f"printf %s {shlex.quote(encoded)} | base64 -d | python3 2>&1",
+        timeout=30,
+    )
+    if result.get("exit_code", 1) != 0:
+        print(f"[panel] vector sync failed: {result.get('output', '')}")
+
+
 def _memory_table_has_column(container_id: str, column: str) -> bool:
     rows = _exec_sql(container_id, "PRAGMA table_info(memories);")
     return any(row.get("name") == column for row in rows)
@@ -299,7 +345,33 @@ def resolve_memory_conflict(
 
     if statements:
         _exec_write(user.container_id, "\n".join(statements), timeout=10)
+    _sync_vector_store(
+        user.container_id,
+        upsert_ids=[keep_id] if keep_id else [],
+        delete_ids=discard_ids,
+    )
     return {"status": "resolved", "keep_id": keep_id, "discard_ids": discard_ids}
+
+
+@router.post("/clear")
+def clear_memories(
+    token: str = Depends(get_token),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(token, db)
+    _check_container(user)
+    if MOCK_MODE:
+        return {"status": "cleared", "message": "所有记忆已清空"}
+
+    statements = ["DELETE FROM memories;"]
+    if _exec_sql(user.container_id, "SELECT name FROM sqlite_master WHERE type='table' AND name='session_summaries';"):
+        statements.append("DELETE FROM session_summaries;")
+    if _exec_sql(user.container_id, "SELECT name FROM sqlite_master WHERE type='table' AND name='memories_fts';"):
+        statements.append("DELETE FROM memories_fts;")
+    statements.append("VACUUM;")
+    _exec_write(user.container_id, "\n".join(statements), timeout=10)
+    _sync_vector_store(user.container_id, clear=True)
+    return {"status": "cleared", "message": "所有记忆已清空"}
 
 
 @router.get("/{memory_id}")
@@ -341,6 +413,7 @@ def update_memory(
 
     if sets:
         _exec_write(user.container_id, f"UPDATE memories SET {', '.join(sets)} WHERE id = {int(memory_id)}")
+        _sync_vector_store(user.container_id, upsert_ids=[int(memory_id)])
 
     return {"status": "updated", "id": memory_id}
 
@@ -364,24 +437,7 @@ def delete_memory(
     if has_fts:
         statements.append(f"DELETE FROM memories_fts WHERE rowid = {int(memory_id)};")
     _exec_write(user.container_id, "\n".join(statements), timeout=5)
+    _sync_vector_store(user.container_id, delete_ids=[int(memory_id)])
     return {"status": "deleted", "id": memory_id}
 
 
-@router.post("/clear")
-def clear_memories(
-    token: str = Depends(get_token),
-    db: Session = Depends(get_db),
-):
-    user = get_current_user(token, db)
-    _check_container(user)
-    if MOCK_MODE:
-        return {"status": "cleared", "message": "所有记忆已清空"}
-
-    statements = ["DELETE FROM memories;"]
-    if _exec_sql(user.container_id, "SELECT name FROM sqlite_master WHERE type='table' AND name='session_summaries';"):
-        statements.append("DELETE FROM session_summaries;")
-    if _exec_sql(user.container_id, "SELECT name FROM sqlite_master WHERE type='table' AND name='memories_fts';"):
-        statements.append("DELETE FROM memories_fts;")
-    statements.append("VACUUM;")
-    _exec_write(user.container_id, "\n".join(statements), timeout=10)
-    return {"status": "cleared", "message": "所有记忆已清空"}

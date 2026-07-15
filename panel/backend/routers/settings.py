@@ -684,7 +684,7 @@ def update_model(data: ModelConfig, token: str = Depends(get_token), db: Session
     env_values = _env_values(user.container_id) if not MOCK_MODE else {}
     test_key = data.api_key or env_values.get(key_name) or env_values.get("CUSTOM_API_KEY") or (_decrypt_key(user.api_key_encrypted) if user.api_key_encrypted else "")
     test_base_url = data.base_url or env_values.get("CUSTOM_BASE_URL") or _default_base_url(data.provider)
-    _test_model_connection(data.provider, data.model or "deepseek-chat", test_base_url, test_key)
+    _test_model_connection(data.provider, data.model or "deepseek-v4-flash", test_base_url, test_key)
 
     if data.api_key:
         updates = {key_name: data.api_key}
@@ -703,7 +703,7 @@ def update_model(data: ModelConfig, token: str = Depends(get_token), db: Session
         config_provider = p_lower
 
     docker_svc.update_config_model(user.container_id, config_provider,
-                                    data.model or "deepseek-chat",
+                                    data.model or "deepseek-v4-flash",
                                     data.base_url or "")
 
     user.model_provider = data.provider; user.model_name = data.model

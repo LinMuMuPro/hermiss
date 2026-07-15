@@ -7,7 +7,7 @@
     ports:
       - "${PANEL_HOST:-127.0.0.1}:${PANEL_PORT:-8000}:8000"
     environment:
-      SECRET_KEY: ${SECRET_KEY:-change-me-hermiss-single-user}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
       DATABASE_URL: sqlite:////app/data/hermes_panel.db
       SINGLE_USER_MODE: "true"
       SINGLE_USER_EMAIL: ${PANEL_USERNAME:-hermiss}
