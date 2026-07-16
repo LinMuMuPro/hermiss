@@ -59,6 +59,21 @@ function SaveUtf8NoBom($path, $lines) {
   [System.IO.File]::WriteAllLines($fullPath, [string[]]$lines, $encoding)
 }
 
+function RepairEnvFile($path) {
+  if (!(Test-Path $path)) { return }
+  $raw = [System.IO.File]::ReadAllText((Join-Path (Get-Location) $path))
+  $raw = $raw.TrimStart([char]0xFEFF)
+  $raw = $raw -replace "`r`n", "`n"
+  $lines = $raw -split "`n"
+  $clean = @()
+  foreach ($line in $lines) {
+    if ($line -ne $null -and $line.Trim() -ne "") {
+      $clean += $line.TrimEnd("`r")
+    }
+  }
+  SaveUtf8NoBom $path $clean
+}
+
 Write-Host ""
 Write-Host "Hermiss single-user one-click deploy" -ForegroundColor Magenta
 Write-Host "Docker Desktop is required. Images will be pulled automatically."
@@ -120,6 +135,7 @@ if (!(Test-Path ".env")) {
   }
   SaveUtf8NoBom ".env" $lines
 }
+RepairEnvFile ".env"
 
 if ($env:HERMISS_DEPLOY_DRY_RUN -eq "1") {
   Write-Host "Dry run passed." -ForegroundColor Green
@@ -136,6 +152,7 @@ Step "Pulling Milvus image"
 PullImage "milvusdb/milvus:v2.4.0" "failed to pull milvusdb/milvus:v2.4.0."
 
 Step "Starting Hermiss panel"
+RepairEnvFile ".env"
 & $DockerCmd compose up -d --build
 if ($LASTEXITCODE -ne 0) { Fail "docker compose up failed." }
 
