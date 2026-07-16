@@ -36,6 +36,9 @@ Write-Host ""
 Write-Host "Hermiss single-user one-click deploy" -ForegroundColor Magenta
 Write-Host "Docker Desktop is required. Images will be pulled automatically."
 
+$PanelImage = "ghcr.io/linmumupro/hermiss-panel:single"
+$RuntimeImage = "ghcr.io/linmumupro/hermiss:single"
+
 Step "Checking Docker"
 $DockerCmd = $null
 $dockerDesktopBin = Join-Path $env:ProgramFiles "Docker\Docker\resources\bin"
@@ -69,8 +72,25 @@ if (!(Test-Path ".env")) {
     "SECRET_KEY=$secretKey"
     "HERMISS_CONTAINER=hermiss-single"
     "HERMISS_CONTAINER_PORT=8770"
-    "DOCKER_IMAGE=ghcr.io/linmumupro/hermiss:single"
+    "DOCKER_IMAGE=$RuntimeImage"
   ) | Set-Content -Path ".env" -Encoding UTF8
+} else {
+  $envText = Get-Content -LiteralPath ".env" -Raw -ErrorAction SilentlyContinue
+  if ($envText -match "ghcr\.io/mumupro/" -or $envText -match "DOCKER_IMAGE=.*:latest") {
+    Write-Host "Found old image config in .env, updating to $RuntimeImage" -ForegroundColor Yellow
+    $lines = Get-Content -LiteralPath ".env" -ErrorAction SilentlyContinue
+    $updated = $false
+    $newLines = foreach ($line in $lines) {
+      if ($line -match "^DOCKER_IMAGE=") {
+        $updated = $true
+        "DOCKER_IMAGE=$RuntimeImage"
+      } else {
+        $line
+      }
+    }
+    if (-not $updated) { $newLines += "DOCKER_IMAGE=$RuntimeImage" }
+    $newLines | Set-Content -Path ".env" -Encoding UTF8
+  }
 }
 
 if ($env:HERMISS_DEPLOY_DRY_RUN -eq "1") {
@@ -78,9 +98,13 @@ if ($env:HERMISS_DEPLOY_DRY_RUN -eq "1") {
   exit 0
 }
 
-Step "Pulling Hermiss image"
-& $DockerCmd pull ghcr.io/linmumupro/hermiss:single
-if ($LASTEXITCODE -ne 0) { Fail "failed to pull ghcr.io/linmumupro/hermiss:single. Please check whether the GitHub package is public." }
+Step "Pulling Hermiss panel image"
+& $DockerCmd pull $PanelImage
+if ($LASTEXITCODE -ne 0) { Fail "failed to pull $PanelImage. Please download the latest Hermiss package from https://github.com/LinMuMuPro/hermiss and try again." }
+
+Step "Pulling Hermiss runtime image"
+& $DockerCmd pull $RuntimeImage
+if ($LASTEXITCODE -ne 0) { Fail "failed to pull $RuntimeImage. Please check whether the GitHub package is public." }
 
 Step "Pulling Milvus image"
 & $DockerCmd pull milvusdb/milvus:v2.4.0
