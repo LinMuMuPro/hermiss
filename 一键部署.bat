@@ -32,6 +32,27 @@ function Fail($text) {
   exit 1
 }
 
+function PullImage($image, $helpText) {
+  $tmp = New-TemporaryFile
+  try {
+    & $DockerCmd pull $image 2>&1 | Tee-Object -FilePath $tmp
+    if ($LASTEXITCODE -eq 0) { return }
+
+    $output = Get-Content -LiteralPath $tmp -Raw -ErrorAction SilentlyContinue
+    if ($output -match "(?i)\b(denied|unauthorized|authentication required)\b" -and $image -like "ghcr.io/*") {
+      Write-Host ""
+      Write-Host "GHCR returned an auth error. This public image does not need login; clearing stale GHCR credentials and retrying..." -ForegroundColor Yellow
+      & $DockerCmd logout ghcr.io 2>$null | Out-Null
+      & $DockerCmd pull $image
+      if ($LASTEXITCODE -eq 0) { return }
+    }
+
+    Fail $helpText
+  } finally {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+  }
+}
+
 Write-Host ""
 Write-Host "Hermiss single-user one-click deploy" -ForegroundColor Magenta
 Write-Host "Docker Desktop is required. Images will be pulled automatically."
@@ -99,16 +120,13 @@ if ($env:HERMISS_DEPLOY_DRY_RUN -eq "1") {
 }
 
 Step "Pulling Hermiss panel image"
-& $DockerCmd pull $PanelImage
-if ($LASTEXITCODE -ne 0) { Fail "failed to pull $PanelImage. Please download the latest Hermiss package from https://github.com/LinMuMuPro/hermiss and try again." }
+PullImage $PanelImage "failed to pull $PanelImage. Please download the latest Hermiss package from https://github.com/LinMuMuPro/hermiss and try again."
 
 Step "Pulling Hermiss runtime image"
-& $DockerCmd pull $RuntimeImage
-if ($LASTEXITCODE -ne 0) { Fail "failed to pull $RuntimeImage. Please check whether the GitHub package is public." }
+PullImage $RuntimeImage "failed to pull $RuntimeImage. Please check whether the GitHub package is public."
 
 Step "Pulling Milvus image"
-& $DockerCmd pull milvusdb/milvus:v2.4.0
-if ($LASTEXITCODE -ne 0) { Fail "failed to pull milvusdb/milvus:v2.4.0." }
+PullImage "milvusdb/milvus:v2.4.0" "failed to pull milvusdb/milvus:v2.4.0."
 
 Step "Starting Hermiss panel"
 & $DockerCmd compose up -d --build
