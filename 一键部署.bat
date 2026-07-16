@@ -32,24 +32,59 @@ function Fail($text) {
   exit 1
 }
 
-function PullImage($image, $helpText) {
-  $tmp = New-TemporaryFile
-  try {
-    & $DockerCmd pull $image 2>&1 | Tee-Object -FilePath $tmp
-    if ($LASTEXITCODE -eq 0) { return }
+function InvokeDockerPull($image) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $DockerCmd
+  $psi.Arguments = "pull $image"
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $proc = New-Object System.Diagnostics.Process
+  $proc.StartInfo = $psi
+  [void]$proc.Start()
+  $stdout = $proc.StandardOutput.ReadToEnd()
+  $stderr = $proc.StandardError.ReadToEnd()
+  $proc.WaitForExit()
+  if ($stdout) { Write-Host $stdout.TrimEnd() }
+  if ($stderr) { Write-Host $stderr.TrimEnd() -ForegroundColor Yellow }
+  return @{
+    Code = $proc.ExitCode
+    Output = "$stdout`n$stderr"
+  }
+}
 
-    $output = Get-Content -LiteralPath $tmp -Raw -ErrorAction SilentlyContinue
-    if ($output -match "(?i)\b(denied|unauthorized|authentication required)\b" -and $image -like "ghcr.io/*") {
-      Write-Host ""
-      Write-Host "GHCR returned an auth error. This public image does not need login; clearing stale GHCR credentials and retrying..." -ForegroundColor Yellow
-      & $DockerCmd logout ghcr.io 2>$null | Out-Null
-      & $DockerCmd pull $image
-      if ($LASTEXITCODE -eq 0) { return }
+function PullImage($image, $helpText) {
+  $lastOutput = ""
+  try {
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+      if ($attempt -gt 1) {
+        Write-Host "Retrying pull ($attempt/3): $image" -ForegroundColor Yellow
+        Start-Sleep -Seconds 3
+      }
+      $result = InvokeDockerPull $image
+      $lastOutput = $result.Output
+      if ($result.Code -eq 0) { return }
+
+      if ($lastOutput -match "(?i)\b(denied|unauthorized|authentication required)\b" -and $image -like "ghcr.io/*") {
+        Write-Host ""
+        Write-Host "GHCR returned an auth error. This public image does not need login; clearing stale GHCR credentials and retrying..." -ForegroundColor Yellow
+        & $DockerCmd logout ghcr.io 2>$null | Out-Null
+        $result = InvokeDockerPull $image
+        $lastOutput = $result.Output
+        if ($result.Code -eq 0) { return }
+      }
+
+      if ($lastOutput -notmatch "(?i)(timeout|timed out|EOF|connection|TLS handshake|request canceled|network)") {
+        break
+      }
     }
 
+    if ($lastOutput -match "(?i)(timeout|timed out|EOF|connection|TLS handshake|request canceled|network)") {
+      Write-Host ""
+      Write-Host "Network timeout while pulling image. If you are in a restricted network, configure Docker Desktop proxy and retry." -ForegroundColor Yellow
+    }
     Fail $helpText
   } finally {
-    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
   }
 }
 
