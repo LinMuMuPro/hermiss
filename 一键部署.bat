@@ -53,6 +53,12 @@ function PullImage($image, $helpText) {
   }
 }
 
+function SaveUtf8NoBom($path, $lines) {
+  $encoding = New-Object System.Text.UTF8Encoding($false)
+  $fullPath = Join-Path (Get-Location) $path
+  [System.IO.File]::WriteAllLines($fullPath, [string[]]$lines, $encoding)
+}
+
 Write-Host ""
 Write-Host "Hermiss single-user one-click deploy" -ForegroundColor Magenta
 Write-Host "Docker Desktop is required. Images will be pulled automatically."
@@ -85,7 +91,7 @@ if (!(Test-Path ".env")) {
   } finally {
     $rng.Dispose()
   }
-  @(
+  $envLines = @(
     "PANEL_HOST=127.0.0.1"
     "PANEL_PORT=8788"
     "PANEL_USERNAME=hermiss"
@@ -94,14 +100,15 @@ if (!(Test-Path ".env")) {
     "HERMISS_CONTAINER=hermiss-single"
     "HERMISS_CONTAINER_PORT=8770"
     "DOCKER_IMAGE=$RuntimeImage"
-  ) | Set-Content -Path ".env" -Encoding UTF8
+  )
+  SaveUtf8NoBom ".env" $envLines
 } else {
   $envText = Get-Content -LiteralPath ".env" -Raw -ErrorAction SilentlyContinue
+  $lines = Get-Content -LiteralPath ".env" -ErrorAction SilentlyContinue
   if ($envText -match "ghcr\.io/mumupro/" -or $envText -match "DOCKER_IMAGE=.*:latest") {
     Write-Host "Found old image config in .env, updating to $RuntimeImage" -ForegroundColor Yellow
-    $lines = Get-Content -LiteralPath ".env" -ErrorAction SilentlyContinue
     $updated = $false
-    $newLines = foreach ($line in $lines) {
+    $lines = foreach ($line in $lines) {
       if ($line -match "^DOCKER_IMAGE=") {
         $updated = $true
         "DOCKER_IMAGE=$RuntimeImage"
@@ -109,9 +116,9 @@ if (!(Test-Path ".env")) {
         $line
       }
     }
-    if (-not $updated) { $newLines += "DOCKER_IMAGE=$RuntimeImage" }
-    $newLines | Set-Content -Path ".env" -Encoding UTF8
+    if (-not $updated) { $lines += "DOCKER_IMAGE=$RuntimeImage" }
   }
+  SaveUtf8NoBom ".env" $lines
 }
 
 if ($env:HERMISS_DEPLOY_DRY_RUN -eq "1") {
