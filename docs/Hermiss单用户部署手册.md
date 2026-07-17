@@ -4,23 +4,23 @@
 
 ## 1. 部署方式
 
-推荐方式是 Docker 部署：
+推荐使用 Docker 部署：
 
 - Hermiss 主程序镜像：`ghcr.io/linmumupro/hermiss:single`
+- Hermiss 面板镜像：`ghcr.io/linmumupro/hermiss-panel:single`
 - Milvus 向量数据库镜像：`milvusdb/milvus:v2.4.0`
-- 面板服务：由本仓库 `panel/` 本地构建
 
-仓库不再携带 `hermiss.tar.gz` 和 `milvus.tar.gz`，部署时会自动从网络拉取镜像。
+仓库不携带 `hermiss.tar.gz` 和 `milvus.tar.gz`，部署时会自动从网络拉取镜像。
 
 ## 2. Windows Docker Desktop 部署
 
 ### 2.1 准备环境
 
 1. 安装 Docker Desktop。
-2. 启动 Docker Desktop，等左下角显示 Docker 正常运行。
+2. 启动 Docker Desktop，等待 Docker 正常运行。
 3. 下载或 clone 本仓库。
 
-### 2.2 一键部署
+### 2.2 一键部署/更新
 
 双击：
 
@@ -30,11 +30,15 @@
 
 脚本会自动完成：
 
-1. 检查 Docker。
-2. 生成 `.env` 配置文件。
-3. 拉取 `ghcr.io/linmumupro/hermiss:single`。
-4. 拉取 `milvusdb/milvus:v2.4.0`。
-5. 构建并启动面板。
+1. 检查 Docker 是否可用。
+2. 检测是否已经部署过 Hermiss。
+3. 自动生成或补齐 `.env` 配置文件。
+4. 拉取最新 Hermiss 面板镜像。
+5. 拉取最新 Hermiss 主程序镜像。
+6. 拉取 Milvus 镜像。
+7. 使用 `docker compose up -d --remove-orphans` 启动或更新服务。
+
+如果之前已经部署过，重复双击同一个脚本就是更新。更新不会删除 Docker volume 中的人设、记忆、配置和表情包。
 
 部署完成后访问：
 
@@ -49,14 +53,13 @@ http://127.0.0.1:8788
 密码：hermiss
 ```
 
-### 2.3 手动部署
+### 2.3 手动部署/更新
 
 ```powershell
 cd C:\path\to\hermiss
 copy .env.example .env
-docker pull ghcr.io/linmumupro/hermiss:single
-docker pull milvusdb/milvus:v2.4.0
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 ## 3. Linux / WSL / macOS 部署
@@ -65,7 +68,8 @@ docker compose up -d --build
 git clone https://github.com/LinMuMuPro/hermiss.git
 cd hermiss
 cp .env.example .env
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 访问：
@@ -74,7 +78,7 @@ docker compose up -d --build
 http://127.0.0.1:8788
 ```
 
-如果部署在服务器上，请把 `.env` 中的 `PANEL_HOST` 改成：
+如果部署在服务器上，或希望局域网手机访问，请把 `.env` 中的 `PANEL_HOST` 改成：
 
 ```env
 PANEL_HOST=0.0.0.0
@@ -103,22 +107,51 @@ DOCKER_IMAGE=ghcr.io/linmumupro/hermiss:single
 - `SECRET_KEY`
 - 如需局域网访问，把 `PANEL_HOST` 改为 `0.0.0.0`
 
-## 5. 首次使用
+## 5. 更新说明
+
+### 推荐更新方式
+
+Windows 用户直接下载最新版项目包，然后双击：
+
+```text
+一键部署.bat
+```
+
+脚本会拉取最新镜像并重建服务，不会删除用户数据。
+
+### 手动更新方式
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+不要执行下面这个命令，除非你明确想清空本地数据：
+
+```bash
+docker compose down -v
+```
+
+## 6. 首次使用
 
 1. 登录面板。
-2. 进入设置页，配置模型。
+2. 在设置页配置模型 API Key。
 3. 扫码绑定微信。
 4. 进入人设页，确认 `SOUL.md` 和 `USER.md`。
 5. 进入表情包页，上传并管理表情包。
 6. 开始聊天测试。
 
-## 6. 常用命令
+## 7. 常用命令
 
 ```bash
-# 启动
-docker compose up -d --build
+# 启动或更新
+docker compose up -d
 
-# 停止
+# 拉取最新镜像并更新
+docker compose pull
+docker compose up -d
+
+# 停止但保留数据
 docker compose down
 
 # 查看容器
@@ -127,12 +160,11 @@ docker compose ps
 # 查看日志
 docker compose logs -f
 
-# 更新 Hermiss 主程序镜像
-docker pull ghcr.io/linmumupro/hermiss:single
-docker compose up -d --build
+# 危险：删除本地数据卷
+docker compose down -v
 ```
 
-## 7. 数据位置
+## 8. 数据位置
 
 面板数据保存在 Docker volume：
 
@@ -140,9 +172,9 @@ docker compose up -d --build
 hermiss-single-panel-data
 ```
 
-Hermiss 主程序、Milvus 和微信相关数据由面板创建的容器与 volume 管理。不要随意删除 Docker volume，否则可能丢失配置、记忆和表情包数据。
+Hermiss 主程序、Milvus、微信配置、记忆、人设和表情包等数据由面板创建的容器与 volume 管理。不要随意删除 Docker volume，否则可能丢失配置、记忆和表情包数据。
 
-## 8. 备份建议
+## 9. 备份建议
 
 备份前先停止服务：
 
@@ -153,26 +185,34 @@ docker compose down
 然后使用 Docker Desktop 或命令行备份相关 volume。恢复时先还原 volume，再启动：
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
-## 9. 常见问题
+## 10. 常见问题
 
-### 9.1 拉取 GHCR 镜像失败
+### 10.1 拉取 GHCR 镜像失败
 
-如果出现无权限：
+如果出现：
 
 ```text
 denied
 unauthorized
 permission_denied
+manifest unknown
 ```
 
-请确认 GitHub Packages 中 `ghcr.io/linmumupro/hermiss` 已设置为 Public。
+请确认 GitHub Packages 中以下镜像已经设置为 Public：
 
-### 9.2 面板打不开
+```text
+ghcr.io/linmumupro/hermiss:single
+ghcr.io/linmumupro/hermiss-panel:single
+```
 
-检查容器状态：
+如果出现 `EOF`、`timeout`、`Client.Timeout exceeded`，通常是网络或代理问题。请配置 Docker Desktop 代理后重试。
+
+### 10.2 面板打不开
+
+检查容器状态和日志：
 
 ```bash
 docker compose ps
@@ -181,7 +221,7 @@ docker compose logs -f
 
 确认 `.env` 中端口没有被占用。
 
-### 9.3 手机访问不到
+### 10.3 手机访问不到
 
 1. `.env` 改为 `PANEL_HOST=0.0.0.0`。
 2. 电脑和手机连接同一个局域网。
@@ -192,9 +232,9 @@ docker compose logs -f
 http://192.168.x.x:8788
 ```
 
-### 9.4 磁盘占用较大
+### 10.4 磁盘占用较大
 
-Hermiss、Milvus、面板构建缓存和运行数据都会占用磁盘。可以查看：
+查看 Docker 占用：
 
 ```bash
 docker system df
@@ -206,11 +246,11 @@ docker system df
 docker system prune
 ```
 
-不要随便加 `--volumes`，否则可能删除数据。
+不要随便加 `--volumes`，否则可能删除用户数据。
 
-## 10. 卸载
+## 11. 卸载
 
-停止并删除面板容器：
+停止服务：
 
 ```bash
 docker compose down
@@ -220,6 +260,7 @@ docker compose down
 
 ```bash
 docker rmi ghcr.io/linmumupro/hermiss:single
+docker rmi ghcr.io/linmumupro/hermiss-panel:single
 docker rmi milvusdb/milvus:v2.4.0
 ```
 

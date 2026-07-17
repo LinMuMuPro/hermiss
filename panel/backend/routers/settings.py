@@ -168,6 +168,7 @@ class ApiKeyUpdate(BaseModel):
 
 class VisionConfig(BaseModel):
     provider: str = ""; model: str = ""; api_key: str | None = None
+    base_url: str | None = None
 
 
 class MultilineConfig(BaseModel):
@@ -175,7 +176,7 @@ class MultilineConfig(BaseModel):
 
 
 class MessageWaitConfig(BaseModel):
-    wait_seconds: float = 6.0
+    wait_seconds: float = 3.0
     proactive_checkin_enabled: bool = True
 
 
@@ -735,7 +736,7 @@ def update_api_key(data: ApiKeyUpdate, token: str = Depends(get_token), db: Sess
 @router.get("/vision")
 def get_vision_config(token: str = Depends(get_token), db: Session = Depends(get_db)):
     user = get_current_user(token, db)
-    provider, model, has_key = "", "", False
+    provider, model, base_url, has_key = "", "", "", False
     if user.container_id:
         try:
             env = docker_svc.read_file(user.container_id, "/root/.hermes/profiles/hermiss/.env")
@@ -748,8 +749,13 @@ def get_vision_config(token: str = Depends(get_token), db: Session = Depends(get
                     provider = line.split("=",1)[1].strip()
                 elif line.startswith("VISION_MODEL="):
                     model = line.split("=",1)[1].strip()
+                elif line.startswith("VISION_BASE_URL="):
+                    base_url = line.split("=",1)[1].strip()
         except: pass
-    return {"provider": provider, "model": model, "has_key": has_key}
+    if provider.startswith(("http://", "https://")) and not base_url:
+        base_url = provider
+        provider = "custom"
+    return {"provider": provider, "model": model, "base_url": base_url, "has_key": has_key}
 
 
 @router.post("/vision")
@@ -757,18 +763,26 @@ def update_vision(data: VisionConfig, token: str = Depends(get_token), db: Sessi
     user = get_current_user(token, db)
     _check_container(user)
     updates = {}
-    if data.provider:
-        updates["VISION_PROVIDER"] = data.provider
+    provider = (data.provider or "").strip()
+    base_url = (data.base_url or "").strip()
+    if provider.startswith(("http://", "https://")) and not base_url:
+        base_url = provider
+        provider = "custom"
+    if provider:
+        updates["VISION_PROVIDER"] = provider
     if data.model:
         updates["VISION_MODEL"] = data.model
+    if base_url:
+        updates["VISION_BASE_URL"] = base_url
     if data.api_key:
         updates["VISION_API_KEY"] = data.api_key
     if updates:
         docker_svc.update_env(user.container_id, updates)
+        docker_svc.update_config_vision(user.container_id, provider, data.model, base_url)
         docker_svc.restart_container(user.container_id)
     from operation_log import log_action
-    log_action(user.email, "update_vision", f"container:{user.container_id}", f"{data.provider}/{data.model}", user.container_id)
-    return {"status": "updated", "provider": data.provider, "model": data.model, "has_key": bool(data.api_key)}
+    log_action(user.email, "update_vision", f"container:{user.container_id}", f"{provider}/{data.model}", user.container_id)
+    return {"status": "updated", "provider": provider, "model": data.model, "base_url": base_url, "has_key": bool(data.api_key)}
 
 
 # ═══════════════════════════════════════════
@@ -808,25 +822,25 @@ def get_message_wait_config(token: str = Depends(get_token), db: Session = Depen
         return {
             "busy_text_mode": "queue",
             "busy_text_debounce_seconds": "3.0",
-            "busy_text_hard_cap_seconds": "6.0",
-            "weixin_text_batch_delay_seconds": "6.0",
-            "weixin_text_batch_split_delay_seconds": "8.0",
+            "busy_text_hard_cap_seconds": "3.0",
+            "weixin_text_batch_delay_seconds": "3.0",
+            "weixin_text_batch_split_delay_seconds": "3.0",
             "requires_restart": True,
         }
     _check_container(user)
     values = _env_values(user.container_id)
     wait_seconds = values.get(
         "WEIXIN_TEXT_BATCH_DELAY_SECONDS",
-        values.get("HERMES_GATEWAY_BUSY_TEXT_HARD_CAP_SECONDS", "6.0"),
+        values.get("HERMES_GATEWAY_BUSY_TEXT_HARD_CAP_SECONDS", "3.0"),
     )
     return {
         "busy_text_mode": values.get("HERMES_GATEWAY_BUSY_TEXT_MODE", "queue"),
         "wait_seconds": wait_seconds,
         "proactive_checkin_enabled": values.get("HERMISS_PROACTIVE_CHECKIN_ENABLED", "true").lower() not in {"0", "false", "no", "off", "disabled"},
         "busy_text_debounce_seconds": values.get("HERMES_GATEWAY_BUSY_TEXT_DEBOUNCE_SECONDS", "3.0"),
-        "busy_text_hard_cap_seconds": values.get("HERMES_GATEWAY_BUSY_TEXT_HARD_CAP_SECONDS", "6.0"),
-        "weixin_text_batch_delay_seconds": values.get("WEIXIN_TEXT_BATCH_DELAY_SECONDS", "6.0"),
-        "weixin_text_batch_split_delay_seconds": values.get("WEIXIN_TEXT_BATCH_SPLIT_DELAY_SECONDS", "8.0"),
+        "busy_text_hard_cap_seconds": values.get("HERMES_GATEWAY_BUSY_TEXT_HARD_CAP_SECONDS", "3.0"),
+        "weixin_text_batch_delay_seconds": values.get("WEIXIN_TEXT_BATCH_DELAY_SECONDS", "3.0"),
+        "weixin_text_batch_split_delay_seconds": values.get("WEIXIN_TEXT_BATCH_SPLIT_DELAY_SECONDS", "3.0"),
         "requires_restart": True,
     }
 

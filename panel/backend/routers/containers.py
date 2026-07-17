@@ -80,3 +80,30 @@ def get_logs(tail: int = 50, token: str = Depends(get_token), db: Session = Depe
 def server_stats(token: str = Depends(get_token), db: Session = Depends(get_db)):
     user = get_current_user(token, db)
     return docker_svc.get_server_stats()
+
+
+@router.get("/updates")
+def check_updates(token: str = Depends(get_token), db: Session = Depends(get_db)):
+    user = get_current_user(token, db)
+    if MOCK_MODE:
+        return {"panel": {}, "runtime": {}, "milvus": {}, "mock": True}
+    ensure_single_container(user, db)
+    return docker_svc.check_updates()
+
+
+@router.post("/update")
+def update_installation(token: str = Depends(get_token), db: Session = Depends(get_db)):
+    user = get_current_user(token, db)
+    if MOCK_MODE:
+        return {"status": "updated", "mock": True}
+    ensure_single_container(user, db)
+    runtime = docker_svc.update_runtime_container(user.container_id, user.panel_port or 8770)
+    panel = docker_svc.schedule_panel_self_update()
+    user.container_status = "running"
+    db.commit()
+    return {
+        "status": "updating",
+        "message": "更新已启动，面板会在几秒后自动重启。",
+        "runtime": runtime,
+        "panel": panel,
+    }

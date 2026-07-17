@@ -7,6 +7,9 @@ import shlex
 import tarfile
 import time
 import json
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 from typing import Optional
 from config import DOCKER_IMAGE
@@ -18,6 +21,7 @@ HERMISS_NETWORK = "hermiss-net"
 MILVUS_CONTAINER = "hermiss-milvus"
 MILVUS_IMAGE = "milvusdb/milvus:v2.4.0"
 MILVUS_VOLUME = "hermiss-milvus-data"
+PANEL_IMAGE = os.getenv("PANEL_IMAGE", "ghcr.io/linmumupro/hermiss-panel:single")
 MEMORY_VECTOR_ENV = {
     "HERMISS_MEMORY_VECTOR_BACKEND": "milvus",
     "HERMISS_MEMORY_VECTOR_ENABLED": "true",
@@ -29,7 +33,7 @@ MEMORY_VECTOR_ENV = {
 def _get_client():
     global _client
     if _client is None:
-        _client = docker.from_env()
+        _client = docker.from_env(timeout=int(os.getenv("DOCKER_API_TIMEOUT", "15")))
     return _client
 
 
@@ -200,9 +204,9 @@ def create_container(container_id: str, panel_port: int) -> dict:
             "HERMES_PANEL_PORT": str(panel_port),
             "HERMES_GATEWAY_BUSY_TEXT_MODE": "queue",
             "HERMES_GATEWAY_BUSY_TEXT_DEBOUNCE_SECONDS": "3.0",
-            "HERMES_GATEWAY_BUSY_TEXT_HARD_CAP_SECONDS": "6.0",
-            "WEIXIN_TEXT_BATCH_DELAY_SECONDS": "6.0",
-            "WEIXIN_TEXT_BATCH_SPLIT_DELAY_SECONDS": "8.0",
+            "HERMES_GATEWAY_BUSY_TEXT_HARD_CAP_SECONDS": "3.0",
+            "WEIXIN_TEXT_BATCH_DELAY_SECONDS": "3.0",
+            "WEIXIN_TEXT_BATCH_SPLIT_DELAY_SECONDS": "3.0",
             "HERMISS_PROACTIVE_CHECKIN_ENABLED": "true",
             **memory_vector_env(container_name),
         },
@@ -213,6 +217,189 @@ def create_container(container_id: str, panel_port: int) -> dict:
     ensure_memory_vector_stack(container_name)
     restart_container(container_name)
     return {"container_name": container_name, "panel_port": panel_port, "status": container.status}
+
+
+def _short_image_id(image_obj) -> str:
+    image_id = getattr(image_obj, "id", "") or ""
+    return image_id.replace("sha256:", "")[:12]
+
+
+def _remote_digest(image: str) -> str:
+    data = _get_client().images.get_registry_data(image)
+    descriptor = data.attrs.get("Descriptor") or {}
+    return descriptor.get("digest") or data.id or ""
+
+
+def _local_image_info(image: str) -> dict:
+    try:
+        local = _get_client().images.get(image)
+    except docker.errors.ImageNotFound:
+        return {"present": False, "id": "", "repo_digests": []}
+    return {
+        "present": True,
+        "id": _short_image_id(local),
+        "repo_digests": local.attrs.get("RepoDigests") or [],
+    }
+
+
+def check_image_update(image: str) -> dict:
+    local = _local_image_info(image)
+    try:
+        remote_digest = _remote_digest(image)
+    except Exception as exc:
+        return {
+            "image": image,
+            "local": local,
+            "remote_digest": "",
+            "update_available": None,
+            "error": str(exc),
+        }
+    local_digests = local.get("repo_digests") or []
+    update_available = True
+    if remote_digest and any(d.endswith(f"@{remote_digest}") or d.endswith(remote_digest) for d in local_digests):
+        update_available = False
+    elif not local.get("present"):
+        update_available = True
+    return {
+        "image": image,
+        "local": local,
+        "remote_digest": remote_digest,
+        "update_available": update_available,
+        "error": "",
+    }
+
+
+def check_updates() -> dict:
+    targets = {
+        "panel": PANEL_IMAGE,
+        "runtime": DOCKER_IMAGE,
+    }
+    results = {}
+    timeout = int(os.getenv("HERMISS_UPDATE_CHECK_TIMEOUT", "18"))
+    executor = ThreadPoolExecutor(max_workers=3)
+    futures = {key: executor.submit(check_image_update, image) for key, image in targets.items()}
+    try:
+        for key, future in futures.items():
+            try:
+                results[key] = future.result(timeout=timeout)
+            except TimeoutError:
+                results[key] = {
+                    "image": targets[key],
+                    "local": _local_image_info(targets[key]),
+                    "remote_digest": "",
+                    "update_available": None,
+                    "error": "检查更新超时，请检查 Docker 网络或代理。",
+                }
+            except Exception as exc:
+                results[key] = {
+                    "image": targets[key],
+                    "local": _local_image_info(targets[key]),
+                    "remote_digest": "",
+                    "update_available": None,
+                    "error": str(exc),
+                }
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    return results
+
+
+def pull_image(image: str) -> dict:
+    pulled = _get_client().images.pull(image)
+    return {
+        "image": image,
+        "id": _short_image_id(pulled),
+        "repo_digests": pulled.attrs.get("RepoDigests") or [],
+    }
+
+
+def update_runtime_container(container_name: str, panel_port: int) -> dict:
+    pull_info = pull_image(DOCKER_IMAGE)
+    try:
+        existing = _get_client().containers.get(container_name)
+        existing.stop(timeout=10)
+        existing.remove(v=False, force=True)
+    except docker.errors.NotFound:
+        pass
+    created = create_container(container_name, panel_port)
+    return {"image": pull_info, "container": created}
+
+
+def _mounts_to_volumes(container) -> dict:
+    volumes = {}
+    for mount in container.attrs.get("Mounts") or []:
+        source = mount.get("Name") if mount.get("Type") == "volume" else mount.get("Source")
+        target = mount.get("Destination")
+        if source and target:
+            volumes[source] = {
+                "bind": target,
+                "mode": "rw" if mount.get("RW", True) else "ro",
+            }
+    return volumes
+
+
+def _ports_for_recreate(container) -> dict:
+    ports = {}
+    for container_port, bindings in (container.attrs.get("NetworkSettings", {}).get("Ports") or {}).items():
+        if not bindings:
+            continue
+        binding = bindings[0]
+        ports[container_port] = (
+            binding.get("HostIp") or "127.0.0.1",
+            int(binding.get("HostPort")),
+        )
+    return ports
+
+
+def _env_for_recreate(container) -> dict:
+    env = {}
+    for item in container.attrs.get("Config", {}).get("Env") or []:
+        if "=" in item:
+            key, value = item.split("=", 1)
+            env[key] = value
+    return env
+
+
+def _replace_panel_container() -> None:
+    time.sleep(2)
+    client = _get_client()
+    current_id = os.getenv("HOSTNAME", "")
+    current = client.containers.get(current_id)
+    original_name = current.name
+    old_name = f"{original_name}-old-{int(time.time())}"
+    ports = _ports_for_recreate(current)
+    volumes = _mounts_to_volumes(current)
+    environment = _env_for_recreate(current)
+    labels = current.attrs.get("Config", {}).get("Labels") or {}
+    restart_policy = current.attrs.get("HostConfig", {}).get("RestartPolicy") or {"Name": "unless-stopped"}
+    networks = list((current.attrs.get("NetworkSettings", {}).get("Networks") or {}).keys())
+    network = networks[0] if networks else None
+
+    current.rename(old_name)
+    client.containers.run(
+        image=PANEL_IMAGE,
+        name=original_name,
+        detach=True,
+        ports=ports,
+        volumes=volumes,
+        environment=environment,
+        labels=labels,
+        network=network,
+        restart_policy=restart_policy,
+    )
+    try:
+        current.stop(timeout=3)
+    finally:
+        try:
+            current.remove(v=False, force=True)
+        except Exception:
+            pass
+
+
+def schedule_panel_self_update() -> dict:
+    pull_info = pull_image(PANEL_IMAGE)
+    thread = threading.Thread(target=_replace_panel_container, daemon=True)
+    thread.start()
+    return {"image": pull_info, "scheduled": True}
 
 
 def delete_container(container_name: str) -> bool:
@@ -407,6 +594,41 @@ def update_config_model(container_name: str, provider: str, model: str, base_url
 # ═══════════════════════════════════════════
 # 查询/日志
 # ═══════════════════════════════════════════
+
+
+def update_config_vision(container_name: str, provider: str, model: str, base_url: str = "") -> bool:
+    """Sync panel vision settings into Hermes auxiliary.vision config."""
+    clean_provider = (provider or "").strip()
+    clean_model = (model or "").strip()
+    clean_base_url = (base_url or "").strip().rstrip("/")
+
+    if clean_provider.startswith(("http://", "https://")) and not clean_base_url:
+        clean_base_url = clean_provider
+        clean_provider = "custom"
+
+    if clean_base_url:
+        provider_name = ensure_custom_provider(container_name, clean_base_url, "VISION_API_KEY")
+        config_provider = f"custom:{provider_name}"
+    else:
+        config_provider = clean_provider.lower()
+
+    ok = True
+    if config_provider:
+        result = exec_in_container(
+            container_name,
+            f"hermiss --profile hermiss config set auxiliary.vision.provider {shlex.quote(config_provider)} 2>&1",
+        )
+        if result.get("exit_code", 1) != 0:
+            ok = False
+    if clean_model:
+        result = exec_in_container(
+            container_name,
+            f"hermiss --profile hermiss config set auxiliary.vision.model {shlex.quote(clean_model)} 2>&1",
+        )
+        if result.get("exit_code", 1) != 0:
+            ok = False
+    return ok
+
 
 def exec_in_container(container_name: str, command: str, timeout: int = 30) -> dict:
     try:

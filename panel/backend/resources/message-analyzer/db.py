@@ -243,9 +243,11 @@ class MemoryDB:
                     """,
                     (int(_profile_env_value("HERMISS_MILVUS_SYNC_LIMIT") or 5000),),
                 ).fetchall()
+                active_ids = {int(row["id"]) for row in rows}
                 for row in rows:
                     self.vector_store.upsert_memory(dict(row))
-            print(f"[message-analyzer] Milvus sync complete: {len(rows)} memories")
+                pruned = self.vector_store.prune_except(active_ids)
+            print(f"[message-analyzer] Milvus sync complete: {len(rows)} memories, pruned={pruned}")
         except Exception as exc:
             print(f"[message-analyzer] Milvus sync failed: {exc}")
 

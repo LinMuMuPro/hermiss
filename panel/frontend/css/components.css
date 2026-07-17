@@ -1694,3 +1694,37 @@ td.mono {
 .sticker-move-panel .btn {
   margin-top: 8px;
 }
+
+#page-settings .update-list {
+  display: grid;
+  gap: 10px;
+}
+
+#page-settings .update-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface2);
+}
+
+#page-settings .update-row strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: .95rem;
+}
+
+#page-settings .update-row .badge {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  #page-settings .update-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

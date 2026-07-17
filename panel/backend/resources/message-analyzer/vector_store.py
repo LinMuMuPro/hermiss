@@ -199,6 +199,30 @@ class MemoryVectorStore:
         self._collection.delete(f'pk == "{self._pk(int(memory_id))}"')
         self._collection.flush()
 
+    def prune_except(self, active_memory_ids: set[int]) -> int:
+        """
+        Delete stale vectors for this profile that no longer exist as active
+        SQLite memories. SQLite remains the source of truth.
+        """
+        if not self.available():
+            return 0
+        active_ids = {int(memory_id) for memory_id in active_memory_ids if int(memory_id) > 0}
+        rows = self._collection.query(
+            expr=f'profile == "{self.profile}"',
+            output_fields=["pk", "memory_id"],
+            limit=16384,
+        )
+        stale_pks = [
+            str(row.get("pk") or self._pk(int(row.get("memory_id") or 0)))
+            for row in rows
+            if int(row.get("memory_id") or 0) not in active_ids
+        ]
+        for pk in stale_pks:
+            self._collection.delete(f'pk == "{pk}"')
+        if stale_pks:
+            self._collection.flush()
+        return len(stale_pks)
+
     def search(self, message: str, *, limit: int = 30) -> list[dict]:
         if not self.available():
             return []

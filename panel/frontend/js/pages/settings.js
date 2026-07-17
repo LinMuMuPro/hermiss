@@ -116,6 +116,10 @@ window.Pages.settings = async function(el) {
           <input id="set-vision-model" value="${vision ? vision.model || '' : ''}" placeholder="deepseek-v4-flash">
         </div>
         <div class="form-group">
+          <label>Base URL</label>
+          <input id="set-vision-base-url" value="${vision ? vision.base_url || '' : ''}" placeholder="https://api.example.com/v1">
+        </div>
+        <div class="form-group">
           <label>API Key（${vision?.has_key ? '已设置，留空保持不变' : '可选'}）</label>
           <input id="set-vision-key" type="password" placeholder="${vision?.has_key ? '留空保持不变' : '输入 key（可选，默认用主模型 key）'}">
         </div>
@@ -149,8 +153,8 @@ window.Pages.settings = async function(el) {
       </p>
       <div class="form-group">
         <label>回复等待（秒）</label>
-        <input id="set-wait-seconds" type="number" min="0" max="30" step="0.5" value="${waitCfg ? waitCfg.wait_seconds || 6 : 6}">
-        <p class="form-hint">统一控制普通连发、长文本拆分和回复中追发的等待窗口。推荐 5-8 秒。</p>
+        <input id="set-wait-seconds" type="number" min="0" max="30" step="0.5" value="${waitCfg ? waitCfg.wait_seconds || 3 : 3}">
+        <p class="form-hint">统一控制普通连发、长文本拆分和回复中追发的等待窗口。默认 3 秒。</p>
       </div>
       <button class="btn btn-primary" id="btn-save-message-wait">保存回复等待</button>
     </div>
@@ -184,6 +188,24 @@ window.Pages.settings = async function(el) {
           <span class=\"theme-slider\"></span>
         </label>
       </div>
+    </div>
+
+
+    <!-- System update -->
+    <div class="card settings-wide" style="padding:16px">
+      <div class="card-head">
+        <div>
+          <h3>系统更新</h3>
+          <p class="form-hint">检查并拉取最新 Hermiss 面板、主程序和 Milvus 镜像。更新会重建容器，不会删除本地数据卷。</p>
+        </div>
+        <span class="badge badge-neutral" id="update-badge">未检查</span>
+      </div>
+      <div id="update-result" class="form-hint" style="margin:12px 0">点击“检查更新”后查看当前镜像状态。</div>
+      <div class="btn-group">
+        <button class="btn" id="btn-check-updates">检查更新</button>
+        <button class="btn btn-primary" id="btn-apply-updates">一键更新</button>
+      </div>
+      <p class="form-hint">更新过程中面板会短暂断开并自动重启；如果页面没有自动恢复，等待 20 秒后手动刷新即可。</p>
     </div>
 
     <!-- 重置 -->
@@ -228,6 +250,117 @@ window.Pages.settings = async function(el) {
       btn.textContent = label;
     }
   }
+
+
+  function updateStatusText(item) {
+    if (!item) return '未检查';
+    if (item.update_available === true) return '发现新版本';
+    if (item.update_available === false) return '已是最新';
+    return '远程检查失败';
+  }
+
+  function updateBadgeClass(item) {
+    if (!item || item.update_available === null || item.update_available === undefined) return 'badge-neutral';
+    return item.update_available ? 'badge-ok' : 'badge-neutral';
+  }
+
+  function formatUpdateError(error) {
+    if (!error) return '';
+    if (/timeout|timed out|Read timed out|Client\.Timeout|EOF/i.test(error)) {
+      return '远程镜像检查超时，通常是网络或 Docker 代理问题。可以稍后重试，或直接点一键更新尝试拉取。';
+    }
+    if (/denied|unauthorized|authentication/i.test(error)) {
+      return '镜像权限校验失败，请确认 GitHub Packages 镜像是 Public。';
+    }
+    return error;
+  }
+
+  function renderUpdateResult(data) {
+    const result = document.getElementById('update-result');
+    const badge = document.getElementById('update-badge');
+    if (!result || !badge) return;
+    const items = [
+      ['panel', '面板'],
+      ['runtime', '主程序'],
+    ];
+    const rows = items.map(([key, label]) => {
+      const item = data[key] || {};
+      const local = item.local || {};
+      const status = updateStatusText(item);
+      const error = formatUpdateError(item.error || '');
+      return `
+        <div class="update-row">
+          <div>
+            <strong>${label}</strong>
+            <div class="form-hint">当前镜像 ID：<span class="mono">${local.id || '未拉取'}</span></div>
+            ${error ? `<div class="form-hint" style="color:var(--danger);margin-top:4px">${error}</div>` : ''}
+          </div>
+          <span class="badge ${updateBadgeClass(item)}">${status}</span>
+        </div>`;
+    }).join('');
+    const hasUpdate = items.some(([key]) => data[key] && data[key].update_available === true);
+    const hasUnknown = items.some(([key]) => data[key] && (data[key].update_available === null || data[key].update_available === undefined));
+    badge.textContent = hasUpdate ? '发现更新' : (hasUnknown ? '部分检查失败' : '已是最新');
+    badge.className = `badge ${hasUpdate ? 'badge-ok' : 'badge-neutral'}`;
+    result.innerHTML = `<div class="update-list">${rows}</div>`;
+  }
+
+  async function waitForPanelBack(timeoutSec = 90) {
+    const maxAttempts = Math.ceil(timeoutSec / 2);
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      try {
+        const res = await fetch(`${API_BASE}/api/health`, { cache: 'no-store' });
+        if (res.ok) return true;
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  document.getElementById('btn-check-updates')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-check-updates');
+    const result = document.getElementById('update-result');
+    try {
+      btn.disabled = true;
+      btn.textContent = '检查中...';
+      if (result) result.textContent = '正在请求远程镜像信息...';
+      const data = await api('/api/container/updates');
+      renderUpdateResult(data);
+    } catch (e) {
+      toast(e.message, 'err');
+      if (result) result.textContent = e.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '检查更新';
+    }
+  });
+
+  document.getElementById('btn-apply-updates')?.addEventListener('click', async () => {
+    const ok = await dialogConfirm('确定立即更新？更新会重建面板和 Hermiss 容器，但不会删除本地数据。');
+    if (!ok) return;
+    const btn = document.getElementById('btn-apply-updates');
+    try {
+      btn.disabled = true;
+      btn.textContent = '更新中...';
+      showRestartOverlay('正在拉取镜像并重建容器，请稍候...');
+      try {
+        await api('/api/container/update', { method: 'POST' });
+      } catch (_) {}
+      const online = await waitForPanelBack();
+      hideRestartOverlay();
+      if (online) {
+        toast('更新完成，正在刷新面板', 'ok');
+        setTimeout(() => location.reload(), 800);
+      } else {
+        toast('更新已发起，但面板恢复超时，请手动刷新', 'err');
+      }
+    } catch (e) {
+      hideRestartOverlay();
+      toast(e.message, 'err');
+      btn.disabled = false;
+      btn.textContent = '一键更新';
+    }
+  });
 
   // ── WeChat QR binding (settings page only) ──
   let settingsQrPolling = null;
@@ -388,6 +521,7 @@ window.Pages.settings = async function(el) {
       const body = {
         provider: document.getElementById('set-vision-provider').value.trim(),
         model: document.getElementById('set-vision-model').value.trim(),
+        base_url: document.getElementById('set-vision-base-url').value.trim(),
       };
       const key = document.getElementById('set-vision-key').value.trim();
       if (key) body.api_key = key;
@@ -453,7 +587,7 @@ window.Pages.settings = async function(el) {
       await api('/api/settings/message-wait', {
         method: 'POST',
         body: JSON.stringify({
-          wait_seconds: Number(waitCfg && waitCfg.wait_seconds ? waitCfg.wait_seconds : 6),
+          wait_seconds: Number(waitCfg && waitCfg.wait_seconds ? waitCfg.wait_seconds : 3),
           proactive_checkin_enabled: enabled,
         })
       });

@@ -5,7 +5,7 @@ cd /d "%~dp0"
 
 echo.
 echo ==========================================
-echo   Hermiss single-user one-click deploy
+echo   Hermiss single-user one-click deploy / update
 echo ==========================================
 echo.
 
@@ -110,7 +110,7 @@ function RepairEnvFile($path) {
 }
 
 Write-Host ""
-Write-Host "Hermiss single-user one-click deploy" -ForegroundColor Magenta
+Write-Host "Hermiss single-user one-click deploy / update" -ForegroundColor Magenta
 Write-Host "Docker Desktop is required. Images will be pulled automatically."
 
 $PanelImage = "ghcr.io/linmumupro/hermiss-panel:single"
@@ -131,44 +131,74 @@ if (-not $DockerCmd) {
 if (-not $DockerCmd) { Fail "docker command was not found." }
 try { & $DockerCmd version | Out-Null } catch { Fail "Docker is not running or is not accessible." }
 
-Step "Preparing .env"
-if (!(Test-Path ".env")) {
+Step "Checking existing installation"
+$existingNames = @()
+try {
+  $existingNames = & $DockerCmd ps -a --format "{{.Names}}"
+} catch {
+  $existingNames = @()
+}
+$HasExistingInstall = ($existingNames -contains "hermiss-single-panel") -or ($existingNames -contains "hermiss-single") -or ($existingNames -contains "hermiss-milvus")
+if ($HasExistingInstall) {
+  Write-Host "Existing Hermiss installation detected. This run will update images and recreate containers without deleting user data." -ForegroundColor Yellow
+} else {
+  Write-Host "No existing Hermiss containers detected. This looks like a first-time deploy." -ForegroundColor Green
+}
+
+function NewSecretKey() {
   $secretBytes = New-Object byte[] 48
   $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
   try {
     $rng.GetBytes($secretBytes)
-    $secretKey = [Convert]::ToBase64String($secretBytes)
+    return [Convert]::ToBase64String($secretBytes)
   } finally {
     $rng.Dispose()
   }
-  $envLines = @(
-    "PANEL_HOST=127.0.0.1"
-    "PANEL_PORT=8788"
-    "PANEL_USERNAME=hermiss"
-    "PANEL_PASSWORD=hermiss"
-    "SECRET_KEY=$secretKey"
-    "HERMISS_CONTAINER=hermiss-single"
-    "HERMISS_CONTAINER_PORT=8770"
-    "DOCKER_IMAGE=$RuntimeImage"
-  )
+}
+
+Step "Preparing .env"
+$defaultEnv = [ordered]@{
+  PANEL_HOST = "127.0.0.1"
+  PANEL_PORT = "8788"
+  PANEL_USERNAME = "hermiss"
+  PANEL_PASSWORD = "hermiss"
+  SECRET_KEY = (NewSecretKey)
+  HERMISS_CONTAINER = "hermiss-single"
+  HERMISS_CONTAINER_PORT = "8770"
+  DOCKER_IMAGE = $RuntimeImage
+}
+
+if (!(Test-Path ".env")) {
+  $envLines = @()
+  foreach ($key in $defaultEnv.Keys) { $envLines += "$key=$($defaultEnv[$key])" }
   SaveUtf8NoBom ".env" $envLines
 } else {
-  $envText = Get-Content -LiteralPath ".env" -Raw -ErrorAction SilentlyContinue
-  $lines = Get-Content -LiteralPath ".env" -ErrorAction SilentlyContinue
-  if ($envText -match "ghcr\.io/mumupro/" -or $envText -match "DOCKER_IMAGE=.*:latest") {
-    Write-Host "Found old image config in .env, updating to $RuntimeImage" -ForegroundColor Yellow
-    $updated = $false
-    $lines = foreach ($line in $lines) {
-      if ($line -match "^DOCKER_IMAGE=") {
-        $updated = $true
-        "DOCKER_IMAGE=$RuntimeImage"
+  $lines = @(Get-Content -LiteralPath ".env" -ErrorAction SilentlyContinue)
+  $foundKeys = @{}
+  $newLines = @()
+  foreach ($line in $lines) {
+    if ($line -match '^\s*([^#=]+)=(.*)$') {
+      $key = $Matches[1].Trim()
+      $foundKeys[$key] = $true
+      if ($key -eq "DOCKER_IMAGE") {
+        if ($line -notmatch [regex]::Escape($RuntimeImage)) {
+          Write-Host "Updating DOCKER_IMAGE to $RuntimeImage" -ForegroundColor Yellow
+        }
+        $newLines += "DOCKER_IMAGE=$RuntimeImage"
       } else {
-        $line
+        $newLines += $line
       }
+    } else {
+      $newLines += $line
     }
-    if (-not $updated) { $lines += "DOCKER_IMAGE=$RuntimeImage" }
   }
-  SaveUtf8NoBom ".env" $lines
+  foreach ($key in $defaultEnv.Keys) {
+    if (-not $foundKeys.ContainsKey($key)) {
+      Write-Host "Adding missing .env key: $key" -ForegroundColor Yellow
+      $newLines += "$key=$($defaultEnv[$key])"
+    }
+  }
+  SaveUtf8NoBom ".env" $newLines
 }
 RepairEnvFile ".env"
 
@@ -177,18 +207,18 @@ if ($env:HERMISS_DEPLOY_DRY_RUN -eq "1") {
   exit 0
 }
 
-Step "Pulling Hermiss panel image"
+Step "Pulling latest Hermiss panel image"
 PullImage $PanelImage "failed to pull $PanelImage. Please download the latest Hermiss package from https://github.com/LinMuMuPro/hermiss and try again."
 
-Step "Pulling Hermiss runtime image"
+Step "Pulling latest Hermiss runtime image"
 PullImage $RuntimeImage "failed to pull $RuntimeImage. Please check whether the GitHub package is public."
 
 Step "Pulling Milvus image"
 PullImage "milvusdb/milvus:v2.4.0" "failed to pull milvusdb/milvus:v2.4.0."
 
-Step "Starting Hermiss panel"
+Step "Starting or updating Hermiss panel"
 RepairEnvFile ".env"
-& $DockerCmd compose up -d --build
+& $DockerCmd compose up -d --remove-orphans
 if ($LASTEXITCODE -ne 0) { Fail "docker compose up failed." }
 
 Step "Waiting for panel"
@@ -203,7 +233,7 @@ for ($i = 1; $i -le 45; $i++) {
 
 if ($ok) {
   Write-Host ""
-  Write-Host "Deploy completed." -ForegroundColor Green
+  Write-Host ($(if ($HasExistingInstall) { "Update completed." } else { "Deploy completed." })) -ForegroundColor Green
   Write-Host "URL: $url"
   Write-Host "Username: hermiss"
   Write-Host "Password: hermiss"
@@ -218,3 +248,5 @@ Write-Host ""
 Write-Host "Common commands:"
 Write-Host "Status: docker compose ps"
 Write-Host "Stop: docker compose down"
+Write-Host "Update later: double-click this script again, or run docker compose pull; docker compose up -d"
+Write-Host "Do not run docker compose down -v unless you want to delete local data."
