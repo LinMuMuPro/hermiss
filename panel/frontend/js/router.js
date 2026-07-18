@@ -1,6 +1,6 @@
 window.Pages = window.Pages || {};
 const routes = [
-  'chat', 'persona', 'memory', 'stickers', 'settings'
+  'chat', 'persona', 'memory', 'cron', 'stickers', 'settings'
 ];
 
 let currentRoute = 'chat';

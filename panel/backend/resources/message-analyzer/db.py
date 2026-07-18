@@ -103,6 +103,57 @@ CONCERN_TRIGGER_TERMS = (
     "\u5065\u8eab", "\u6e38\u6cf3", "\u51fa\u95e8", "\u6dcb\u96e8", "\u5439\u7a7a\u8c03", "\u8fd0\u52a8",
 )
 
+SCENE_RECALL_TERMS = {
+    "food": (
+        "\u996d", "\u83dc", "\u5403", "\u559d", "\u9910", "\u997f", "\u897f\u7ea2\u67ff", "\u756a\u8304",
+        "\u9e21\u86cb", "\u96ea\u7cd5", "\u51b0\u6dc7\u6dcb", "\u51b7\u996e", "\u5976\u8336", "\u751c",
+        "\u8fa3", "\u706b\u9505", "\u70e7\u70e4", "\u559c\u6b22\u5403", "\u4e0d\u559c\u6b22\u5403",
+    ),
+    "health": CONCERN_MEMORY_TERMS + CONCERN_TRIGGER_TERMS,
+    "emotion": (
+        "\u7d2f", "\u70e6", "\u96be\u8fc7", "\u59d4\u5c48", "\u538b\u529b", "\u7126\u8651", "\u7d27\u5f20",
+        "\u5f00\u5fc3", "\u60f3\u54ed", "\u5d29\u6e83", "\u5fc3\u60c5", "\u5b64\u72ec", "\u60f3\u4f60",
+    ),
+    "activity": (
+        "\u8003\u8bd5", "\u5b66\u4e60", "\u4e0a\u73ed", "\u9879\u76ee", "\u5f00\u4f1a", "\u5065\u8eab",
+        "\u8dd1\u6b65", "\u51fa\u95e8", "\u56de\u5bb6", "\u7761\u89c9", "\u6d17\u6fa1", "\u5fd9",
+        "\u5de5\u4f5c", "\u4f5c\u4e1a", "\u8bfe", "\u9762\u8bd5",
+    ),
+    "relationship": (
+        "\u559c\u6b22", "\u7231", "\u60f3\u4f60", "\u966a", "\u79f0\u547c", "\u540d\u5b57", "\u53eb\u6211",
+        "\u522b\u53eb", "\u4e0d\u559c\u6b22\u4f60", "\u4f60\u662f", "\u6211\u662f", "\u5173\u7cfb",
+    ),
+    "style": (
+        "\u8bed\u6c14", "\u98ce\u683c", "\u4e0d\u8981", "\u522b\u603b", "\u4e0d\u559c\u6b22", "\u53eb\u540d\u5b57",
+        "\u53eb\u6211\u540d\u5b57", "\u540d\u5b57", "\u79f0\u547c", "\u8868\u60c5", "emoji", "\u989c\u6587\u5b57",
+        "\u5ba2\u670d", "\u8bf4\u6559", "\u592a\u5b98\u65b9",
+    ),
+}
+
+
+def _detect_recall_scenes(message: str) -> set[str]:
+    text = message or ""
+    scenes = set()
+    for scene, terms in SCENE_RECALL_TERMS.items():
+        if any(term in text for term in terms):
+            scenes.add(scene)
+    if _message_may_need_concern_recall(text):
+        scenes.add("health")
+    return scenes
+
+
+def _scene_search_terms(scenes: set[str]) -> tuple[str, ...]:
+    terms: list[str] = []
+    for scene in scenes:
+        terms.extend(SCENE_RECALL_TERMS.get(scene, ()))
+    seen = set()
+    unique_terms = []
+    for term in terms:
+        if term and term not in seen:
+            seen.add(term)
+            unique_terms.append(term)
+    return tuple(unique_terms)
+
 def _message_may_need_concern_recall(message: str) -> bool:
     text = (message or "").lower()
     if not text:
@@ -186,7 +237,20 @@ def _extract_user_name_memory(entry: str) -> str | None:
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            return match.group(1).strip()
+            candidate = match.group(1).strip()
+            reject_terms = (
+                "问", "几天", "多久", "没见", "好久", "我俩", "我们", "你", "吗", "嘛", "呢",
+                "什么", "谁", "哪个", "哪位", "哪里", "怎么", "为什么", "是不是", "有没有",
+            )
+            if (
+                not candidate
+                or len(candidate) > 12
+                or candidate in {"你", "我", "自己", "谁", "什么", "什么角色", "哪个", "哪位"}
+                or any(term in candidate for term in reject_terms)
+                or candidate.endswith(("？", "?", "吗", "嘛", "呢"))
+            ):
+                return None
+            return candidate
     return None
 
 class MemoryDB:
@@ -486,6 +550,23 @@ class MemoryDB:
                             created_at DESC
                         LIMIT ?""",
                     (*like_params, max(8, limit // 3)),
+                ).fetchall()
+                remember(rows, priority=True)
+
+            scenes = _detect_recall_scenes(message)
+            scene_terms = _scene_search_terms(scenes)
+            if scene_terms:
+                like_sql, like_params = _build_like_filter(("entry", "source_msg", "category"), scene_terms)
+                rows = conn.execute(
+                    f"""SELECT * FROM memories
+                        WHERE ({like_sql})
+                          AND COALESCE(status, 'active') = 'active'
+                          AND (expires_at IS NULL OR expires_at > datetime('now'))
+                        ORDER BY
+                            CASE importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                            created_at DESC
+                        LIMIT ?""",
+                    (*like_params, max(8, limit // 2)),
                 ).fetchall()
                 remember(rows, priority=True)
 

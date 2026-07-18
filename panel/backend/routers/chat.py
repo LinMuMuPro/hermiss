@@ -38,6 +38,7 @@ def _run_json_script(container_name: str, script: str, timeout: int = 60) -> dic
     command = (
         "PYTHON_BIN=/usr/local/lib/hermes-agent/venv/bin/python3\n"
         "[ -x \"$PYTHON_BIN\" ] || PYTHON_BIN=python3\n"
+        "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1 PYTHONIOENCODING=utf-8\n"
         f"printf %s {shlex.quote(encoded)} | base64 -d | \"$PYTHON_BIN\""
     )
     result = docker_svc.exec_in_container(container_name, command, timeout=timeout)
@@ -160,6 +161,45 @@ conn.close()
 print(json.dumps({{'messages': items}}, ensure_ascii=False))
 """
     return _run_json_script(container_name, script, timeout=20)
+
+
+@router.get("/short-state")
+def chat_short_state(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    container_name = _container_name(user, db)
+    script = """
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+path = Path('/root/.hermes/profiles/hermiss/memory/short_term_user_state.json')
+if not path.exists():
+    print(json.dumps({'status': 'none', 'state': None, 'reason': 'missing'}, ensure_ascii=False))
+    raise SystemExit
+
+try:
+    data = json.loads(path.read_text(encoding='utf-8'))
+except Exception as exc:
+    print(json.dumps({'status': 'error', 'state': None, 'error': str(exc)}, ensure_ascii=False))
+    raise SystemExit
+
+state = data.get('state') if isinstance(data, dict) else None
+if isinstance(state, dict):
+    started_raw = str(state.get('started_at') or '')
+    try:
+        started = datetime.fromisoformat(started_raw.replace('Z', '+00:00'))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        age_seconds = max(0, int((datetime.now(timezone.utc) - started.astimezone(timezone.utc)).total_seconds()))
+    except Exception:
+        age_seconds = None
+    state['age_seconds'] = age_seconds
+data['state'] = state
+print(json.dumps(data, ensure_ascii=False))
+"""
+    return _run_json_script(container_name, script, timeout=10)
 
 
 @router.post("/send")

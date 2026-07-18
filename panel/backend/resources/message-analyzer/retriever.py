@@ -22,6 +22,8 @@ def _is_casual_short_message(message: str) -> bool:
     text = "".join(str(message or "").split())
     if _is_food_related_message(text):
         return False
+    if _is_style_related_message(text):
+        return False
     return text in CASUAL_SHORT_MESSAGES or (len(text) <= 8 and not any(ch.isdigit() for ch in text))
 
 
@@ -40,7 +42,12 @@ def _filter_casual_memories(memories: list[dict]) -> list[dict]:
 
 
 FOOD_TERMS = ("\u996d", "\u83dc", "\u997f", "\u9910", "\u897f\u7ea2\u67ff", "\u756a\u8304", "\u9e21\u86cb", "\u96ea\u7cd5", "\u98df\u7269", "\u505a\u996d", "\u4e1c\u897f")
-STYLE_TERMS = ("\u4e0d\u559c\u6b22", "\u522b\u603b", "\u4e0d\u8981\u603b", "\u53eb\u540d\u5b57", "\u79f0\u547c", "\u8bed\u6c14", "\u98ce\u683c")
+STYLE_TERMS = ("\u4e0d\u559c\u6b22", "\u88ab\u53eb", "\u522b\u603b", "\u4e0d\u8981\u603b", "\u53eb\u540d\u5b57", "\u53eb\u6211\u540d\u5b57", "\u5168\u540d", "\u540d\u5b57", "\u79f0\u547c", "\u8bed\u6c14", "\u98ce\u683c")
+HEALTH_TERMS = (
+    "\u611f\u5192", "\u53d1\u70e7", "\u54b3\u55fd", "\u55d3\u5b50", "\u5589\u5499", "\u5934\u75bc", "\u5934\u75db",
+    "\u80c3\u75bc", "\u80c3\u75db", "\u809a\u5b50\u75bc", "\u62c9\u809a\u5b50", "\u8179\u6cfb", "\u751f\u75c5",
+    "\u4e0d\u8212\u670d", "\u8fc7\u654f", "\u5931\u7720", "\u71ac\u591c", "\u7ecf\u671f", "\u59e8\u5988",
+)
 
 
 def _is_food_related_message(message: str) -> bool:
@@ -50,26 +57,59 @@ def _is_food_related_message(message: str) -> bool:
     return "\u5403" in text and "\u836f" not in text
 
 
+def _is_style_related_message(message: str) -> bool:
+    text = str(message or "")
+    return any(term in text for term in STYLE_TERMS) or any(term in text.lower() for term in ("emoji", "ai"))
+
+
 def _filter_topic_memories(memories: list[dict], message: str) -> list[dict]:
     text = str(message or "")
     food_related = _is_food_related_message(text)
+    style_related = _is_style_related_message(text)
     filtered = []
     for memory in memories:
         entry = str(memory.get("entry") or "")
         category = str(memory.get("category") or "")
         is_style = any(term in entry for term in STYLE_TERMS)
         is_food_pref = category == "preference" and any(term in entry for term in FOOD_TERMS)
-        if is_food_pref and not food_related and not is_style:
+        is_health = any(term in entry for term in HEALTH_TERMS)
+        if food_related:
+            if is_food_pref or is_health:
+                filtered.append(memory)
+            continue
+        if style_related:
+            if is_style or "\u540d\u5b57" in entry or "\u79f0\u547c" in entry:
+                filtered.append(memory)
+            continue
+        if is_food_pref and not is_style:
             continue
         filtered.append(memory)
     return filtered
+
+
+def _cap_context_memories(memories: list[dict], max_items: int = 8) -> list[dict]:
+    if len(memories) <= max_items:
+        return memories
+    high = [m for m in memories if m.get("importance") == "high"]
+    rest = [m for m in memories if m.get("importance") != "high"]
+    capped = []
+    seen = set()
+    for memory in high + rest:
+        memory_id = memory.get("id")
+        if memory_id in seen:
+            continue
+        seen.add(memory_id)
+        capped.append(memory)
+        if len(capped) >= max_items:
+            break
+    return capped
 
 
 def build_memory_context(
     db: MemoryDB,
     message: str,
     *,
-    broad_limit: int = 30,
+    broad_limit: int = 24,
 ) -> str:
     """
     Query memories, format as system prompt context block.
@@ -80,6 +120,7 @@ def build_memory_context(
     candidates = _filter_topic_memories(candidates, message)
     if _is_casual_short_message(message):
         candidates = _filter_casual_memories(candidates)
+    candidates = _cap_context_memories(candidates, max_items=8)
     if not candidates:
         return ""
 

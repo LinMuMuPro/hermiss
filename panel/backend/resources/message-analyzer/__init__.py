@@ -21,6 +21,7 @@ import json
 import os
 import re
 import re
+import sqlite3
 import subprocess
 import threading
 from datetime import datetime, timedelta, timezone
@@ -28,7 +29,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .db import MemoryDB
-from .classifier import CLASSIFY_SENTINEL, build_classify_prompt, classify_locally, parse_classify_response
+from .classifier import CLASSIFY_SENTINEL, build_classify_prompt, parse_classify_response
 from .retriever import build_full_context
 from .reminder_manager import (
     ensure_reminder_dir,
@@ -100,7 +101,6 @@ REALITY_BOUNDARY_CONTEXT = (
     "Avoid statements like 'I put the medicine on the table', 'I made/poured/brewed it for you', or 'I am beside your bed' as literal facts. "
     "Prefer wording like 'remember to keep the medicine nearby', 'go make yourself some warm water', or 'imagine me nudging you gently' when appropriate."
 )
-
 
 def _env_bool(name: str, default: bool = True) -> bool:
     raw = _env_value(name)
@@ -286,7 +286,60 @@ def register(ctx):
         "last_user_message_at": "",
         "checkin_style_hint": "",
         "checkin_dirty": False,
+        "check_in_minutes": 0,
+        "checkin_followup_stage": 0,
+        "checkin_frequency": "normal",
+        "short_term_user_state": None,
+        "short_term_user_state_injected": False,
+        "state_base": None,
     }
+    short_state_file = hermes_home / "memory" / "short_term_user_state.json"
+
+    def _clean_state_base_text(value, limit: int = 160) -> str:
+        text = " ".join(str(value or "").strip().split())
+        if text in {"", "无", "none", "None", "null", "省略"}:
+            return ""
+        return text[:limit]
+
+    def _load_persisted_state_base() -> None:
+        try:
+            if not short_state_file.exists():
+                return
+            data = json.loads(short_state_file.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return
+            saved_state = data.get("state")
+            if isinstance(saved_state, dict) and str(saved_state.get("text") or "").strip():
+                state["short_term_user_state"] = saved_state
+            saved_base = data.get("base")
+            if isinstance(saved_base, dict):
+                state["state_base"] = saved_base
+        except Exception as e:
+            print(f"[message-analyzer] load state base failed: {e}", flush=True)
+
+    def _persist_short_term_user_state(reason: str = "updated") -> None:
+        try:
+            current_state = state.get("short_term_user_state")
+            current_base = state.get("state_base")
+            payload = {
+                "status": "none",
+                "reason": reason,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "state": None,
+                "base": current_base if isinstance(current_base, dict) else None,
+            }
+            if isinstance(current_state, dict) and str(current_state.get("text") or "").strip():
+                payload["status"] = "active"
+                payload["state"] = current_state
+            if isinstance(current_base, dict) and str(current_base.get("summary") or "").strip():
+                payload["status"] = "active"
+            short_state_file.parent.mkdir(parents=True, exist_ok=True)
+            short_state_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            print(f"[message-analyzer] persist short state failed: {e}", flush=True)
+
+    _load_persisted_state_base()
+    _persist_short_term_user_state("startup")
 
     # ── Helpers ─────────────────────────────────────────────────
 
@@ -315,6 +368,30 @@ def register(ctx):
             return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
         except Exception:
             return ""
+
+    def _timestamp_to_local_dt(value) -> datetime | None:
+        if value in (None, ""):
+            return None
+        try:
+            tz = ZoneInfo(_env_value("TZ") or "Asia/Shanghai")
+        except Exception:
+            tz = timezone.utc
+        try:
+            if isinstance(value, (int, float)):
+                dt = datetime.fromtimestamp(float(value), timezone.utc)
+            else:
+                raw = str(value).strip()
+                if not raw:
+                    return None
+                if raw.replace(".", "", 1).isdigit():
+                    dt = datetime.fromtimestamp(float(raw), timezone.utc)
+                else:
+                    dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(tz)
+        except Exception:
+            return None
 
     def _local_time_text_for(dt: datetime) -> str:
         try:
@@ -347,8 +424,10 @@ def register(ctx):
             return ""
         for item in items:
             role = str(_item_value(item, "role", "sender") or "unknown")
+            display_role = "你" if role == "assistant" else ("用户" if role == "user" else role)
             content = str(_item_value(item, "content", "message") or "")
             content = " ".join(content.split())
+            content = _compact_activity_text(content, 180)
             if not content:
                 continue
             if role == "tool":
@@ -363,10 +442,505 @@ def register(ctx):
                 content = content[:177] + "..."
             if with_time:
                 ts = _timestamp_to_local_text(_item_value(item, "timestamp", "created_at", "time"))
-                rows.append(f"[{ts or 'time unknown'}] {role}: {content}")
+                rows.append(f"[{ts or 'time unknown'}] {display_role}: {content}")
             else:
-                rows.append(f"{role}: {content}")
+                rows.append(f"{display_role}: {content}")
         return "\n".join(rows)
+
+    def _format_classify_context(conversation_history, current_user_message: str, limit: int = 6) -> str:
+        """Return recent context for classification without duplicating the current user message."""
+        if not conversation_history:
+            return ""
+        current = " ".join(str(current_user_message or "").split())
+        try:
+            items = list(conversation_history)
+        except Exception:
+            return ""
+        if current:
+            while items:
+                role = str(_item_value(items[-1], "role", "sender") or "unknown")
+                content = " ".join(str(_item_value(items[-1], "content", "message") or "").split())
+                if role == "user" and content == current:
+                    items.pop()
+                    continue
+                break
+        return _format_recent_context(items, limit=limit)
+
+    def _compact_activity_text(content: str, limit: int = 160) -> str:
+        text = " ".join(str(content or "").split())
+        if not text:
+            return ""
+        if "The user sent an image" in text or "image_url:" in text or "Here's what I can see" in text:
+            lower = text.lower()
+            details = []
+            for word in ("螺蛳粉", "外卖", "takeout", "soup", "shrimp", "noodles", "泡椒凤爪", "荔枝", "meal"):
+                if word.lower() in lower and word not in details:
+                    details.append(word)
+            if details:
+                return f"用户发了一张图片，内容和{('、'.join(details[:5]))}有关。"
+            return "用户发了一张图片。"
+        if len(text) > limit:
+            return text[: max(0, limit - 3)] + "..."
+        return text
+
+    def _message_needs_temporal_guard(message: str) -> bool:
+        text = message or ""
+        terms = (
+            "想你", "想我", "几天", "多久", "没见", "好久", "久别", "上次", "刚才",
+            "新会话", "新对话", "多久没", "几天没", "多长时间",
+        )
+        return any(term in text for term in terms)
+
+    def _contains_temporal_gap_terms(message: str) -> bool:
+        text = message or ""
+        terms = ("几天", "多久", "没见", "好久", "久别", "多久没", "几天没", "多长时间")
+        return any(term in text for term in terms)
+
+    def _format_duration_zh(seconds: float) -> str:
+        total = max(0, int(seconds))
+        days, rem = divmod(total, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, _ = divmod(rem, 60)
+        if days:
+            return f"{days}天{hours}小时"
+        if hours:
+            return f"{hours}小时{minutes}分钟"
+        if minutes:
+            return f"{minutes}分钟"
+        return "不到1分钟"
+
+    def _is_usable_chat_content(content: str) -> bool:
+        text = " ".join(str(content or "").split())
+        if not text:
+            return False
+        if text.startswith("[IMPORTANT: You are running as a scheduled cron job"):
+            return False
+        if text in {"[SILENT]", "定时任务测试已触发。"}:
+            return False
+        if "active_checkin.json" in text or "HERMES PROACTIVE REPLY" in text:
+            return False
+        return True
+
+    def _find_global_last_chat_message(session_id: str = "") -> dict | None:
+        """Find the latest real chat message across sessions.
+
+        This is used when a new session has no conversation_history yet. A new
+        session does not mean the user and bot have not talked recently.
+        """
+        state_db = hermes_home / "state.db"
+        if not state_db.exists():
+            return None
+        queries = []
+        params = []
+        if session_id:
+            queries.append(
+                """
+                SELECT id, session_id, role, content, timestamp
+                FROM messages
+                WHERE active=1
+                  AND role='user'
+                  AND content IS NOT NULL
+                  AND session_id != ?
+                ORDER BY timestamp DESC, id DESC
+                LIMIT 12
+                """
+            )
+            params.append((session_id,))
+        queries.append(
+            """
+            SELECT id, session_id, role, content, timestamp
+            FROM messages
+            WHERE active=1
+              AND role='user'
+              AND content IS NOT NULL
+            ORDER BY timestamp DESC, id DESC
+            LIMIT 12
+            """
+        )
+        params.append(())
+        try:
+            conn = sqlite3.connect(str(state_db))
+            conn.row_factory = sqlite3.Row
+            try:
+                for query, query_params in zip(queries, params):
+                    rows = conn.execute(query, query_params).fetchall()
+                    for row in rows:
+                        content = " ".join(str(row["content"] or "").split())
+                        if not _is_usable_chat_content(content):
+                            continue
+                        dt = _timestamp_to_local_dt(row["timestamp"])
+                        if not dt:
+                            continue
+                        return {
+                            "role": str(row["role"] or "unknown"),
+                            "content": content[:80],
+                            "timestamp": dt,
+                            "session_id": str(row["session_id"] or ""),
+                        }
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"[message-analyzer] global last chat lookup failed: {e}")
+        return None
+
+    def _build_temporal_guard_context(
+        conversation_history,
+        current_local_dt: datetime,
+        is_first_turn: bool,
+        session_id: str = "",
+    ) -> str:
+        last_dt = None
+        last_role = ""
+        last_content = ""
+        try:
+            items = list(conversation_history or [])
+        except Exception:
+            items = []
+        for item in reversed(items):
+            role = str(_item_value(item, "role", "sender") or "unknown")
+            if role == "tool":
+                continue
+            content = " ".join(str(_item_value(item, "content", "message") or "").split())
+            if not _is_usable_chat_content(content):
+                continue
+            dt = _timestamp_to_local_dt(_item_value(item, "timestamp", "created_at", "time"))
+            if dt:
+                last_dt = dt
+                last_role = role
+                last_content = content[:80]
+                break
+
+        lines = [
+            "[HERMES TEMPORAL CONTEXT - anti-hallucination]",
+            f"当前本地时间: {_local_time_text_for(current_local_dt)}.",
+            "不要根据“新会话/新对话”推断用户和你很久没聊；新会话只表示上下文重置，不表示现实时间过去很多天。",
+            "禁止无时间证据时说“几天没见”“好久不见”“两天没聊”“这么久没见”等时长判断。",
+            "如果用户说“想你”，只回应情绪本身，不要自行编造分离时长。",
+        ]
+        if last_dt:
+            diff = max(0, (current_local_dt - last_dt).total_seconds())
+            lines.append(
+                f"当前可见聊天里上一条消息是 {last_role} 在 {_local_time_text_for(last_dt)} 发出的，距离现在约 {_format_duration_zh(diff)}。"
+            )
+            if diff < 86400:
+                lines.append("可见证据显示间隔不到一天，所以不能说几天没见或两天没见。")
+            lines.append(f"上一条可见消息摘录: {last_content}")
+        elif is_first_turn:
+            global_last = _find_global_last_chat_message(session_id=str(session_id or ""))
+            if global_last:
+                global_dt = global_last["timestamp"]
+                diff = max(0, (current_local_dt - global_dt).total_seconds())
+                lines.append(
+                    f"当前会话没有可见历史，但全局最近用户消息在 {_local_time_text_for(global_dt)}，距离现在约 {_format_duration_zh(diff)}。"
+                )
+                if diff < 86400:
+                    lines.append("全局真实聊天间隔不到一天，所以不能说几天没见、两天没聊、好久不见，也不要反问用户“几天了”。")
+                if _contains_temporal_gap_terms(str(global_last["content"])):
+                    lines.append("全局上一条用户消息涉及询问聊天间隔；不要沿用其中的时间猜测，也不要反问具体几天。")
+                else:
+                    lines.append(f"全局上一条用户消息摘录: {global_last['content']}")
+            else:
+                lines.append("当前可见聊天历史没有上一条消息；这不能证明现实中已经隔了几天。不要主动谈论分离时长，也不要反问“几天了”。")
+        return "\n".join(lines)
+
+    def _short_state_expected_minutes(value) -> int:
+        try:
+            minutes = int(value or 0)
+        except Exception:
+            minutes = 0
+        if minutes <= 0:
+            return 90
+        return max(5, min(minutes, 480))
+
+    def _clear_dynamic_state_base(reason: str = "cleared") -> None:
+        state["short_term_user_state"] = None
+        state["short_term_user_state_injected"] = False
+        state["state_base"] = None
+        state["recent_context"] = ""
+        state["recent_context_with_time"] = ""
+        state["last_activity_hint"] = ""
+        state["last_user_message"] = ""
+        state["last_user_message_at"] = ""
+        _persist_short_term_user_state(reason)
+        print(f"[message-analyzer] Dynamic state base cleared: {reason}", flush=True)
+
+    def _update_short_term_user_state(result: dict | None, source_msg: str) -> None:
+        if not isinstance(result, dict):
+            return
+        action = str(result.get("short_state") or "none").strip().lower()
+        text = " ".join(str(result.get("short_state_text") or "").split())
+        if action in {"end", "ended", "finish", "finished"}:
+            if state.get("short_term_user_state"):
+                print("[message-analyzer] Short state cleared", flush=True)
+            state["short_term_user_state"] = None
+            _persist_short_term_user_state("ended")
+            return
+        if action not in {"start", "continue"} or not text:
+            return
+        now = datetime.now(timezone.utc)
+        minutes = _short_state_expected_minutes(result.get("short_state_minutes"))
+        unavailable = str(result.get("short_state_unavailable") or "no").strip().lower() in {"yes", "true", "1", "是"}
+        state["short_term_user_state"] = {
+            "text": text[:120],
+            "source_msg": _compact_activity_text(source_msg, 120)[:120],
+            "started_at": now.isoformat(),
+            "expected_minutes": minutes,
+            "unavailable": unavailable,
+        }
+        print(
+            "[message-analyzer] Short state set: "
+            f"{text[:60]} ({minutes}m, unavailable={unavailable})",
+            flush=True,
+        )
+        _persist_short_term_user_state("set")
+
+    def _update_state_base(result: dict | None, source_msg: str) -> None:
+        if not isinstance(result, dict):
+            return
+        now = datetime.now(timezone.utc)
+        current_base = state.get("state_base")
+        if not isinstance(current_base, dict):
+            current_base = {}
+
+        summary = _clean_state_base_text(result.get("state_base_summary"), 180)
+        mood = _clean_state_base_text(result.get("state_base_mood"), 140)
+        caution = _clean_state_base_text(result.get("state_base_caution"), 180)
+        source = _clean_state_base_text(_compact_activity_text(source_msg, 160), 160)
+
+        emotion = str(result.get("emotion") or "neutral").strip().lower()
+        emotion_map = {
+            "positive": "积极",
+            "neutral": "中性",
+            "negative": "消极",
+            "intense": "强烈",
+        }
+        recent_emotion = emotion_map.get(emotion, emotion) if emotion and emotion != "neutral" else ""
+
+        short_state = str(result.get("short_state") or "none").strip().lower()
+        short_text = _clean_state_base_text(result.get("short_state_text"), 120)
+        if short_state in {"start", "continue"} and short_text:
+            current_base["current_state"] = short_text
+        elif short_state in {"end", "ended", "finish", "finished"}:
+            current_base["current_state"] = ""
+
+        if summary:
+            current_base["summary"] = summary
+        elif source:
+            current_base["summary"] = f"用户刚才说：{source}"
+
+        if recent_emotion:
+            current_base["recent_emotion"] = recent_emotion
+        elif not current_base.get("recent_emotion"):
+            current_base["recent_emotion"] = ""
+
+        if mood:
+            current_base["relationship_mood"] = mood
+        if caution:
+            current_base["caution"] = caution
+
+        current_base["last_user_message"] = source
+        current_base["updated_at"] = now.isoformat()
+        state["state_base"] = {
+            key: value
+            for key, value in current_base.items()
+            if isinstance(value, bool) or str(value or "").strip()
+        }
+        _persist_short_term_user_state("base_updated")
+
+    def _clear_consumed_short_state_if_needed(result: dict | None) -> None:
+        if not state.get("short_term_user_state_injected"):
+            return
+        action = ""
+        if isinstance(result, dict):
+            action = str(result.get("short_state") or "none").strip().lower()
+        if action not in {"start", "continue"}:
+            state["short_term_user_state"] = None
+            print("[message-analyzer] Short state consumed", flush=True)
+            _persist_short_term_user_state("consumed")
+        state["short_term_user_state_injected"] = False
+
+    def _build_state_base_context(user_message: str, current_local_dt: datetime) -> str:
+        current_base = state.get("state_base")
+        if not isinstance(current_base, dict):
+            current_base = {}
+        current_state = state.get("short_term_user_state")
+        state_text = ""
+        if isinstance(current_state, dict):
+            state_text = str(current_state.get("text") or "").strip()
+        if not current_base and not state_text:
+            return ""
+
+        lines = [
+            "[HERMES STATE BASE - concise dynamic context]",
+            "这是每轮都会带上的简易状态底座，只用于当前对话连续性和主动消息，不是长期记忆。",
+            "根据用户当前消息和场景决定是否自然使用；不要强行复述，不要暴露这段提示。",
+        ]
+        if state_text:
+            lines.append(f"- 当前状态: {state_text}")
+        for label, key in (
+            ("状态摘要", "summary"),
+            ("最近情绪", "recent_emotion"),
+            ("关系氛围", "relationship_mood"),
+            ("回复注意", "caution"),
+            ("最近用户消息", "last_user_message"),
+        ):
+            value = _clean_state_base_text(current_base.get(key), 180)
+            if value:
+                lines.append(f"- {label}: {value}")
+        updated_raw = str(current_base.get("updated_at") or "")
+        if updated_raw:
+            try:
+                updated_dt = datetime.fromisoformat(updated_raw.replace("Z", "+00:00"))
+                if updated_dt.tzinfo is None:
+                    updated_dt = updated_dt.replace(tzinfo=timezone.utc)
+                age = max(0, (datetime.now(timezone.utc) - updated_dt.astimezone(timezone.utc)).total_seconds())
+                lines.append(f"- 底座更新时间: 约{_format_duration_zh(age)}前")
+            except Exception:
+                pass
+        lines.extend([
+            f"- 当前用户消息: {user_message}",
+            "使用规则: 优先回应当前用户消息；如果底座和当前消息冲突，以当前消息为准；只在有帮助时自然带入。",
+        ])
+        return "\n".join(lines)
+
+    def _build_short_term_state_context(user_message: str, current_local_dt: datetime) -> str:
+        current_state = state.get("short_term_user_state")
+        if not isinstance(current_state, dict):
+            state["short_term_user_state_injected"] = False
+            return ""
+        text = str(current_state.get("text") or "").strip()
+        if not text:
+            state["short_term_user_state"] = None
+            state["short_term_user_state_injected"] = False
+            _persist_short_term_user_state("empty")
+            return ""
+        started_raw = str(current_state.get("started_at") or "")
+        try:
+            started_dt = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+            if started_dt.tzinfo is None:
+                started_dt = started_dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            state["short_term_user_state"] = None
+            state["short_term_user_state_injected"] = False
+            _persist_short_term_user_state("invalid_started_at")
+            return ""
+        age_seconds = max(0, (datetime.now(timezone.utc) - started_dt.astimezone(timezone.utc)).total_seconds())
+        expected_minutes = _short_state_expected_minutes(current_state.get("expected_minutes"))
+        # Keep it short-lived. After the expected window plus a buffer, stop nudging.
+        if age_seconds > (expected_minutes + 90) * 60:
+            state["short_term_user_state"] = None
+            state["short_term_user_state_injected"] = False
+            _persist_short_term_user_state("expired")
+            return ""
+        early_state = age_seconds < max(180, expected_minutes * 60 * 0.35)
+        timing_hint = ""
+        if early_state:
+            timing_hint = (
+                "注意：距离上一状态开始明显早于通常完成时间。"
+                "如果当前消息像是已经切到另一个状态或完成了另一件事，要优先表现出一点自然的意外或疑惑。"
+                "不要自动脑补用户已经完成上一状态，除非用户明确说“回来了/结束了/刚完成/游完了/考完了”。"
+            )
+        source_msg = str(current_state.get("source_msg") or "").strip()
+        unavailable = bool(current_state.get("unavailable"))
+        lines = [
+            "[HERMES SHORT-TERM USER STATE]",
+            f"上一轮推断的用户短期状态: {text}",
+            f"状态来源消息: {source_msg or text}",
+            f"距离该状态开始约: {_format_duration_zh(age_seconds)}；预期持续约: {expected_minutes}分钟。",
+            f"该状态通常是否不方便看手机: {'是' if unavailable else '否'}。",
+            f"当前用户消息: {user_message}",
+            "这不是长期记忆，只用于判断当前回复是否需要体现对话连续性。",
+            "如果当前消息自然延续、结束或解释了上一状态，就正常接话。",
+            "如果当前消息和上一状态出现明显跳跃或矛盾，不要机械顺着新话题；先用非常自然的一点诧异、疑惑或调侃接住，再回应新内容。",
+            "不要每次都套用固定句式，不要说你在根据状态判断，不要显得像系统提醒。",
+        ]
+        if timing_hint:
+            lines.insert(-1, timing_hint)
+        state["short_term_user_state_injected"] = True
+        return "\n".join(lines)
+
+    def _short_term_state_snapshot() -> dict | None:
+        current_state = state.get("short_term_user_state")
+        if not isinstance(current_state, dict):
+            return None
+        text = str(current_state.get("text") or "").strip()
+        if not text:
+            return None
+        return {
+            "text": text,
+            "source_msg": str(current_state.get("source_msg") or "").strip(),
+            "started_at": str(current_state.get("started_at") or ""),
+            "expected_minutes": _short_state_expected_minutes(current_state.get("expected_minutes")),
+            "unavailable": bool(current_state.get("unavailable")),
+        }
+
+    def _state_base_snapshot() -> dict | None:
+        current_base = state.get("state_base")
+        if not isinstance(current_base, dict):
+            return None
+        snapshot = {
+            key: _clean_state_base_text(value, 180)
+            for key, value in current_base.items()
+            if key != "updated_at" and _clean_state_base_text(value, 180)
+        }
+        if current_base.get("updated_at"):
+            snapshot["updated_at"] = str(current_base.get("updated_at"))
+        return snapshot or None
+
+    def _build_state_base_checkin_context(snapshot: dict | None) -> str:
+        if not isinstance(snapshot, dict) or not snapshot:
+            return ""
+        lines = [
+            "[HERMES STATE BASE - proactive]",
+            "这是主动消息可参考的简易状态底座，不是长期记忆；只在有帮助时自然使用，不要复述为清单。",
+        ]
+        for label, key in (
+            ("当前状态", "current_state"),
+            ("状态摘要", "summary"),
+            ("最近情绪", "recent_emotion"),
+            ("关系氛围", "relationship_mood"),
+            ("回复注意", "caution"),
+            ("最近用户消息", "last_user_message"),
+        ):
+            value = _clean_state_base_text(snapshot.get(key), 180)
+            if value:
+                lines.append(f"- {label}: {value}")
+        return "\n".join(lines)
+
+    def _build_short_term_state_checkin_context(snapshot: dict | None, trigger_dt: datetime) -> str:
+        if not isinstance(snapshot, dict):
+            return ""
+        text = str(snapshot.get("text") or "").strip()
+        started_raw = str(snapshot.get("started_at") or "")
+        if not text or not started_raw:
+            return ""
+        try:
+            started_dt = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+            if started_dt.tzinfo is None:
+                started_dt = started_dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            return ""
+        trigger_utc = trigger_dt.astimezone(timezone.utc) if trigger_dt.tzinfo else trigger_dt.replace(tzinfo=timezone.utc)
+        age_seconds = max(0, (trigger_utc - started_dt.astimezone(timezone.utc)).total_seconds())
+        expected_minutes = _short_state_expected_minutes(snapshot.get("expected_minutes"))
+        unavailable = bool(snapshot.get("unavailable"))
+        source_msg = str(snapshot.get("source_msg") or "").strip()
+        if age_seconds < max(180, expected_minutes * 60 * 0.35):
+            status_hint = "触发时明显早于通常完成时间，用户可能仍在该状态中；不要问“在干什么”。"
+        elif age_seconds <= (expected_minutes + 90) * 60:
+            status_hint = "触发时接近该状态可能完成或刚结束的时间；优先关心进度、结果、累不累、顺不顺。"
+        else:
+            status_hint = "触发时距离该状态已经较久；不要像即时聊天一样继续旧状态，只把它当作背景。"
+        return "\n".join([
+            "[HERMES SHORT-TERM USER STATE - proactive]",
+            f"最后一次短期状态: {text}",
+            f"状态来源消息: {source_msg or text}",
+            f"到主动消息触发时预计已过去: {_format_duration_zh(age_seconds)}；原预计持续: {expected_minutes}分钟。",
+            f"该状态通常是否不方便看手机: {'是' if unavailable else '否'}。",
+            f"状态判断: {status_hint}",
+            "这不是长期记忆，不能断言用户现在一定在做这件事；只能用于推断主动消息是否该问进度、结果、累不累，还是避免打扰。",
+            "如果触发时间是深夜或清晨，仍然优先遵守安静时段规则，不要提问。",
+        ])
 
     def _local_time_text() -> str:
         try:
@@ -386,6 +960,37 @@ def register(ctx):
         except Exception as e:
             print(f"[message-analyzer] read profile file failed: {path}: {e}")
             return ""
+
+    def _persona_forbids_plain_emoji() -> bool:
+        soul_text = _read_profile_markdown(hermes_home / "SOUL.md", limit=12000)
+        if not soul_text:
+            return False
+        lower_text = soul_text.lower()
+        emoji_terms = ("emoji", "表情、emoji", "表情 emoji", "颜文字")
+        allow_terms = ("允许使用emoji", "可以使用emoji", "允许使用 emoji", "可以使用 emoji")
+        forbid_terms = ("禁止", "严禁", "不准", "不要", "不能", "不得")
+        if any(term in lower_text for term in allow_terms):
+            return False
+        if not any(term in lower_text for term in emoji_terms):
+            return False
+        for term in emoji_terms:
+            index = lower_text.find(term)
+            if index < 0:
+                continue
+            window = lower_text[max(0, index - 30): index + 30]
+            if any(forbid in window for forbid in forbid_terms):
+                return True
+        return False
+
+    def _build_output_style_guard_context() -> str:
+        if not _persona_forbids_plain_emoji():
+            return ""
+        return (
+            "[HERMES OUTPUT STYLE GUARD - FOLLOW CURRENT SOUL.md]\n"
+            "当前 SOUL.md 明确禁止普通 Emoji / 颜文字。本轮最终回复不得包含任何 Unicode Emoji 或颜文字，"
+            "也不要用 Emoji 来表达暧昧、调侃、开心或安慰。\n"
+            "如果需要表达语气，只使用自然中文、标点和措辞。"
+        )
 
     def _build_persona_context() -> str:
         soul_text = _read_profile_markdown(hermes_home / "SOUL.md")
@@ -473,6 +1078,100 @@ def register(ctx):
         selected = suggested if suggested else default_hours
         return max(min_hours, min(max_hours, int(selected or default_hours)))
 
+    def _choose_checkin_minutes(result: dict | None = None) -> int:
+        """Choose the next proactive delay from the dynamic state base."""
+        default_minutes = _env_int("HERMISS_PROACTIVE_CHECKIN_DEFAULT_MINUTES", 180)
+        min_minutes = _env_int("HERMISS_PROACTIVE_CHECKIN_MIN_MINUTES", 15)
+        max_minutes = _env_int("HERMISS_PROACTIVE_CHECKIN_MAX_MINUTES", 480)
+        if min_minutes < 5:
+            min_minutes = 5
+        if max_minutes < min_minutes:
+            max_minutes = min_minutes
+
+        text = "\n".join([
+            str(state.get("recent_context") or ""),
+            str(state.get("last_activity_hint") or ""),
+            str(state.get("last_user_message") or ""),
+            json.dumps(state.get("state_base") or {}, ensure_ascii=False),
+            json.dumps(state.get("short_term_user_state") or {}, ensure_ascii=False),
+        ]).lower()
+        style_hint, suggested_hours = _activity_style_hint(text)
+        selected = int(default_minutes)
+        explicit_short_eta = False
+        llm_minutes = 0
+        llm_hours = 0
+
+        if isinstance(result, dict):
+            try:
+                llm_minutes = int(result.get("check_in_minutes") or 0)
+            except Exception:
+                llm_minutes = 0
+            try:
+                llm_hours = int(result.get("check_in_hours") or 0)
+            except Exception:
+                llm_hours = 0
+            frequency = str(result.get("check_in_frequency") or "").strip().lower()
+            if frequency in {"关闭", "off", "disable", "disabled", "stop", "停止"}:
+                state["checkin_frequency"] = "off"
+                state["checkin_style_hint"] = "用户不希望主动回访；不要创建主动消息任务。"
+                return 0
+            if frequency in {"降低", "low", "less", "reduce", "reduced"}:
+                state["checkin_frequency"] = "low"
+
+            if llm_minutes <= 0 and llm_hours <= 0:
+                state["checkin_style_hint"] = "LLM 本轮未建议主动回访；不创建主动消息任务。"
+                return 0
+
+        if re.search(r"别.*(主动|回访|问|找|打扰)|不用.*(主动|回访|问|找)|太频繁|太烦|少.*(主动|问|找)|安静点|别打扰", text):
+            state["checkin_frequency"] = "low"
+            style_hint = "用户觉得主动回访可能过于频繁；后续主动消息必须明显降频、少打扰、低压力。"
+
+        short_state = state.get("short_term_user_state")
+        if llm_minutes > 0:
+            selected = llm_minutes
+        elif isinstance(short_state, dict) and str(short_state.get("text") or "").strip():
+            expected = _short_state_expected_minutes(short_state.get("expected_minutes"))
+            explicit_short_eta = expected <= 30
+            if expected <= 15:
+                selected = max(8, min(expected + 10, 30))
+            else:
+                selected = max(15, min(expected + 15, 120))
+
+        if llm_minutes <= 0 and re.search(r"外卖|点了.*粉|点了.*饭|点了.*面|等.*吃|等.*餐|配送|骑手|螺蛳粉|黄焖鸡|奶茶|咖啡", text):
+            if not explicit_short_eta:
+                selected = min(selected, 45)
+            style_hint = "用户刚点了外卖或正在等吃的；主动消息应该较快触发，关心吃到了没有、味道怎么样，不能拖到很多小时后。"
+        elif llm_minutes <= 0 and re.search(r"睡|晚安|困了|休息|躺下|熬不住", text):
+            selected = max(90, min(240, suggested_hours * 60 if suggested_hours else 180))
+            style_hint = "用户可能在休息或准备睡觉；主动消息要轻，不要追问在干什么，可像醒后/休息后的温柔关心。"
+        elif llm_minutes <= 0 and re.search(r"考试|考场|面试|开会|会议|上课|课堂|健身|锻炼|跑步|游泳|开车|骑车|地铁|高铁|飞机|洗澡|看电影|看剧|出门|上班|工作|加班|学习|写作业|复习", text):
+            selected = max(60, min(180, suggested_hours * 60 if suggested_hours else 120))
+            style_hint = "用户提到一个可能暂时不看手机的活动；不要问“在干什么”，优先问进度、结果、累不累、顺不顺利。"
+        elif llm_minutes <= 0 and re.search(r"难受|不舒服|感冒|发烧|头疼|胃疼|咳嗽|累|崩溃|烦|焦虑|紧张|害怕|难过|委屈|哭", text):
+            selected = min(selected, 90)
+            style_hint = "用户可能处于身体或情绪低落状态；主动消息要短、软一点，先关心状态，不要讲道理。"
+        elif llm_minutes <= 0 and suggested_hours:
+            selected = min(selected, suggested_hours * 60)
+
+        if llm_minutes <= 0 and llm_hours > 0:
+            selected = llm_hours * 60
+
+        if state.get("checkin_frequency") == "low":
+            selected = max(selected * 3, _env_int("HERMISS_PROACTIVE_LOW_FREQUENCY_MINUTES", 360))
+            style_hint = f"{style_hint} 用户偏好低频主动消息；本次已自动延后。"
+
+        state["checkin_style_hint"] = style_hint
+        return max(min_minutes, min(max_minutes, int(selected or default_minutes)))
+
+    def _next_followup_minutes(stage: int) -> int:
+        chain = [
+            _env_int("HERMISS_PROACTIVE_FOLLOWUP_1_MINUTES", 120),
+            _env_int("HERMISS_PROACTIVE_FOLLOWUP_2_MINUTES", 240),
+            _env_int("HERMISS_PROACTIVE_FOLLOWUP_3_MINUTES", 480),
+        ]
+        idx = max(0, min(len(chain) - 1, int(stage or 0)))
+        return max(30, chain[idx])
+
     def _assume_previous_checkin_unreplied() -> bool:
         cf = reminder_dir / "active_checkin.json"
         if not cf.exists():
@@ -532,14 +1231,69 @@ def register(ctx):
 
     def _classify_via_llm(message: str, conversation_history=None) -> dict | None:
         """Step 1 (preferred): Use ctx.llm for independent classification."""
+        def _needs_short_state_retry(parsed: dict | None, raw_text: str) -> bool:
+            if not parsed:
+                return False
+            if str(parsed.get("short_state") or "none").lower() not in {"", "none"}:
+                return False
+            try:
+                if int(parsed.get("check_in_hours") or 0) > 0:
+                    return True
+                if int(parsed.get("check_in_minutes") or 0) > 0:
+                    return True
+            except Exception:
+                pass
+            return False
+
+        def _classify_short_state_only() -> dict | None:
+            short_prompt = f"""只判断下面这条用户消息是否包含短期用户状态。
+不要回复用户，只输出 XML：
+<hermes_classify>
+短期状态: 开始|持续|结束|无
+状态内容: 用户准备/正在……（无则写 无）
+状态预计分钟: 数字，无法判断填 60
+状态不便看手机: 是|否
+</hermes_classify>
+
+规则：
+- 用户表达接下来要做、正在做、准备做、刚进入某种状态时，输出 开始或持续。例：我要去洗澡了、一会考试、准备休息。
+- 用户表达活动结束、返回、完成、放弃、醒来时，输出 结束。例：回来了、做完了、睡醒了。
+- 普通寒暄、想念、问答，没有可延续活动或明确状态，输出 无。其他情况由上下文自行判断，不要依赖固定场景词表。
+
+用户消息：
+{message}"""
+            retry_kwargs = {
+                "max_tokens": 160,
+                "temperature": 0,
+                "timeout": 20,
+                "purpose": "short_state_classification",
+            }
+            if classify_provider and classify_provider != "auto":
+                retry_kwargs["provider"] = classify_provider
+            if classify_model:
+                retry_kwargs["model"] = classify_model
+            if callable(getattr(llm_client, "complete", None)):
+                retry_result = llm_client.complete(
+                    [{"role": "user", "content": short_prompt}],
+                    **retry_kwargs,
+                )
+                retry_text = getattr(retry_result, "text", retry_result)
+            elif callable(llm_client):
+                retry_text = llm_client(short_prompt, max_tokens=160, temperature=0)
+            else:
+                return None
+            retry_parsed = parse_classify_response(str(retry_text))
+            print(f"[message-analyzer] short state retry parsed: {retry_parsed}", flush=True)
+            return retry_parsed
+
         prompt = build_classify_prompt(
             message,
-            recent_context=_format_recent_context(conversation_history),
+            recent_context=_format_classify_context(conversation_history, message),
         )
         try:
             if callable(getattr(llm_client, "complete", None)):
                 llm_kwargs = {
-                    "max_tokens": 256,
+                    "max_tokens": 512,
                     "temperature": 0.1,
                     "timeout": 30,
                     "purpose": "memory_classification",
@@ -558,7 +1312,14 @@ def register(ctx):
             else:
                 print("[message-analyzer] classify_via_llm skipped: ctx.llm has no supported API")
                 return None
-            parsed = parse_classify_response(str(result_text))
+            raw_result_text = str(result_text)
+            parsed = parse_classify_response(raw_result_text)
+            if _needs_short_state_retry(parsed, raw_result_text):
+                retry_parsed = _classify_short_state_only()
+                if retry_parsed:
+                    for key in ("short_state", "short_state_text", "short_state_minutes", "short_state_unavailable"):
+                        if retry_parsed.get(key) not in (None, "", "none", "无"):
+                            parsed[key] = retry_parsed.get(key)
             print(f"[message-analyzer] classify parsed: {parsed}", flush=True)
             return parsed
         except Exception as e:
@@ -613,6 +1374,7 @@ def register(ctx):
 # 
         if not allow_checkin:
             state["check_in_hours"] = 0
+            state["check_in_minutes"] = 0
             state["checkin_dirty"] = False
             return
 
@@ -622,22 +1384,16 @@ def register(ctx):
             if isinstance(check_in_hours, int) and check_in_hours > 0:
                 print("[message-analyzer] Check-in skipped: disabled by HERMISS_PROACTIVE_CHECKIN_ENABLED")
             state["check_in_hours"] = 0
+            state["check_in_minutes"] = 0
             state["checkin_dirty"] = False
             return
-        if isinstance(check_in_hours, int) and check_in_hours > 0:
-            min_hours = _env_int("HERMISS_PROACTIVE_CHECKIN_MIN_HOURS", 2)
-            max_hours = _env_int("HERMISS_PROACTIVE_CHECKIN_MAX_HOURS", 8)
-            state["check_in_hours"] = max(min_hours, min(max_hours, check_in_hours))
-            style_hint, _ = _activity_style_hint(
-                "\n".join([
-                    str(state.get("recent_context") or ""),
-                    str(state.get("last_activity_hint") or ""),
-                    source_msg or "",
-                ])
-            )
-            state["checkin_style_hint"] = style_hint
+        selected_minutes = _choose_checkin_minutes(result)
+        if selected_minutes > 0:
+            state["check_in_minutes"] = selected_minutes
+            state["check_in_hours"] = max(1, (selected_minutes + 59) // 60)
+            state["checkin_followup_stage"] = 0
             state["checkin_dirty"] = True
-            print(f"[message-analyzer] Check-in refresh requested: {state['check_in_hours']}h")
+            print(f"[message-analyzer] Check-in refresh requested: {selected_minutes}m (state-driven)")
 
     def _cancel_checkin():
         """Cancel any active check-in — user is back."""
@@ -650,9 +1406,14 @@ def register(ctx):
                 return
             data["cancelled"] = True
             cf.write_text(json.dumps(data))
-            # Try to delete the cron job via CLI; prompt also self-checks cancelled flag
-            job_id = _extract_cron_job_id(data.get("job_id", ""))
-            if job_id and job_id != "unknown":
+            # Try to delete cron jobs via CLI; prompts also self-check cancelled flag
+            raw_job_ids = data.get("job_ids") or [data.get("job_id", "")]
+            job_ids = []
+            for raw_job_id in raw_job_ids:
+                job_id = _extract_cron_job_id(str(raw_job_id or ""))
+                if job_id and job_id != "unknown" and job_id not in job_ids:
+                    job_ids.append(job_id)
+            for job_id in job_ids:
                 try:
                     subprocess.run(
                         ["hermes", "--profile", profile, "cron", "delete", job_id],
@@ -670,23 +1431,30 @@ def register(ctx):
             _cancel_checkin()
             state["checkin_dirty"] = False
             return
+        check_in_minutes = state.get("check_in_minutes", 0)
         check_in_hours = state.get("check_in_hours", 0)
-        if not isinstance(check_in_hours, int) or check_in_hours <= 0:
+        if not isinstance(check_in_minutes, int) or check_in_minutes <= 0:
+            if isinstance(check_in_hours, int) and check_in_hours > 0:
+                check_in_minutes = check_in_hours * 60
+        if not isinstance(check_in_minutes, int) or check_in_minutes <= 0:
             state["checkin_dirty"] = False
             return
-        if check_in_hours > 168:  # Cap at 7 days — anything longer is absurd
-            check_in_hours = 168
+        if check_in_minutes > 10080:  # Cap at 7 days — anything longer is absurd
+            check_in_minutes = 10080
 
         # Replacing a check-in means old jobs must either be deleted or self-silence.
         _cancel_checkin()
 
         created_at = datetime.now(timezone.utc)
-        fire_at_dt = created_at + timedelta(hours=check_in_hours)
+        fire_at_dt = created_at + timedelta(minutes=check_in_minutes)
         checkin_id = created_at.strftime("%Y%m%dT%H%M%S%fZ")
+        followup_stage = int(state.get("checkin_followup_stage") or 0)
         recent_context = state.get("recent_context", "")
         recent_context_with_time = state.get("recent_context_with_time", recent_context)
         last_user_message_at = state.get("last_user_message_at", "")
         last_activity_hint = state.get("last_activity_hint", state.get("last_user_message", ""))
+        short_state_snapshot = _short_term_state_snapshot()
+        state_base_snapshot = _state_base_snapshot()
         scene_text = f"{recent_context}\\n{last_activity_hint}"
         style_hint = state.get("checkin_style_hint") or _activity_style_hint(scene_text)[0]
         fire_at_dt, style_hint, quiet_delayed = _quiet_hour_policy(fire_at_dt, style_hint, scene_text)
@@ -703,7 +1471,10 @@ def register(ctx):
         cf = reminder_dir / "active_checkin.json"
         cf.write_text(json.dumps({
             "cancelled": False,
-            "check_in_hours": check_in_hours,
+            "check_in_hours": max(1, (check_in_minutes + 59) // 60),
+            "check_in_minutes": check_in_minutes,
+            "followup_stage": followup_stage,
+            "max_followup_stage": 3,
             "effective_delay_minutes": effective_delay_minutes,
             "effective_delay": effective_delay,
             "checkin_id": checkin_id,
@@ -716,6 +1487,8 @@ def register(ctx):
             "last_activity_hint": last_activity_hint,
             "recent_context": recent_context,
             "recent_context_with_time": recent_context_with_time,
+            "short_term_user_state": short_state_snapshot,
+            "state_base": state_base_snapshot,
             "quiet_hour_delayed": bool(quiet_delayed),
         }, indent=2, ensure_ascii=False))
 
@@ -724,6 +1497,9 @@ def register(ctx):
         persona_context = _build_persona_context()
         transcript_block = recent_context_with_time or recent_context or "(no recent transcript captured)"
         last_activity_block = last_activity_hint or "(no latest user activity captured)"
+        state_base_block = _build_state_base_checkin_context(state_base_snapshot)
+        short_state_block = _build_short_term_state_checkin_context(short_state_snapshot, fire_at_dt)
+        deliver_target = _resolve_deliver_target()
         if effective_delay_minutes >= 60:
             context_age_hint = f"about {round(effective_delay_minutes / 60, 1)} hour(s)"
         else:
@@ -749,6 +1525,8 @@ def register(ctx):
             f"Use recent_context_with_time as the primary transcript. Use last_activity_hint only as a short summary of the latest user activity.\n\n"
             f"recent_context_with_time:\n{transcript_block}\n\n"
             f"last_activity_hint:\n{last_activity_block}\n\n"
+            f"{state_base_block + chr(10) + chr(10) if state_base_block else ''}"
+            f"{short_state_block + chr(10) + chr(10) if short_state_block else ''}"
             f"Scene strategy: {style_hint}\n\n"
             f"Stale-context rule: because proactive replies normally happen after a long silence, do NOT continue the old exchange as if it is still live. "
             f"If the last user message was a direct question to you, an emotion check, or a short temporary remark, do not answer it as if it was just asked. "
@@ -773,24 +1551,69 @@ def register(ctx):
         if memory_context:
             prompt += f"\n\nMemory context is authoritative user background. Use it only when naturally relevant, but do not contradict it:\n{memory_context}"
 
-        try:
-            result = subprocess.run(
-                ["hermes", "--profile", profile, "cron", "create", effective_delay, prompt, "--deliver", _resolve_deliver_target()],
-                capture_output=True, text=True, timeout=10,
+        def _stage_prompt(stage: int, stage_fire_at: datetime, stage_delay_minutes: int) -> str:
+            if stage_delay_minutes >= 60:
+                stage_age_hint = f"about {round(stage_delay_minutes / 60, 1)} hour(s)"
+            else:
+                stage_age_hint = f"about {stage_delay_minutes} minute(s)"
+            stage_text = prompt.replace(
+                f"Actual local trigger time for this message: {trigger_local_time}.",
+                f"Actual local trigger time for this message: {_local_time_text_for(stage_fire_at)}.",
+            ).replace(
+                f"The latest user context is {context_age_hint} old by design.",
+                f"The latest user context is {stage_age_hint} old by design.",
             )
-            if result.returncode == 0:
-                job_id = _extract_cron_job_id(result.stdout)
+            stage_number = stage + 1
+            unreplied_count = stage
+            base_instruction = (
+                "\n\n[HERMES PROACTIVE FOLLOW-UP STAGE]\n"
+                f"这是第 {stage_number} 次主动回访。用户已经连续没有回复主动消息 {unreplied_count} 次。\n"
+                "每一次回访都必须重新根据 recent_context_with_time、last_activity_hint、状态底座、短期状态、当前触发时间和时间间隔，推测用户此刻可能状态。\n"
+                "不要把上一条主动消息当成刚发生的实时对话；不要继续追问旧问题；不要重复上一条主动消息的表达。\n"
+                "越往后的回访越要轻、越少打扰、越不给用户压力。不要明说“这是第几次回访”或“你没回复”。"
+            )
+            if stage <= 0:
+                return stage_text + base_instruction + "\n首次主动回访：可以自然承接状态底座，但要像普通关心，不要像任务提醒。"
+            if stage >= 3:
+                return stage_text + base_instruction + "\n最终兜底回访：只发一条很轻、很软、无压力的陪伴消息。不要提问，不要要求回应，不要制造负担。"
+            return stage_text + base_instruction + "\n中间回访：比上一次更轻一点。根据用户可能状态选择关心进度、结果、休息、或只是安静陪伴。"
+
+        try:
+            job_ids = []
+            job_specs = [(0, effective_delay_minutes)]
+            cumulative_minutes = effective_delay_minutes
+            for stage in range(1, 4):
+                cumulative_minutes += _next_followup_minutes(stage - 1)
+                job_specs.append((stage, cumulative_minutes))
+
+            for stage, delay_minutes in job_specs:
+                delay_text = f"{max(1, int(delay_minutes))}m"
+                stage_fire_at = created_at + timedelta(minutes=delay_minutes)
+                result = subprocess.run(
+                    [
+                        "hermes", "--profile", profile, "cron", "create",
+                        delay_text, _stage_prompt(stage, stage_fire_at, delay_minutes),
+                        "--deliver", deliver_target,
+                    ],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    job_id = _extract_cron_job_id(result.stdout)
+                    job_ids.append(job_id)
+                    print(
+                        f"[message-analyzer] Check-in cron stage {stage}: {delay_text} "
+                        f"(job={job_id})"
+                    )
+                else:
+                    err = result.stderr.strip()
+                    print(f"[message-analyzer] Check-in cron failed stage {stage} (rc={result.returncode}): {err}")
+                    break
+            if job_ids:
                 data = json.loads(cf.read_text())
-                data["job_id"] = job_id
+                data["job_id"] = job_ids[0]
+                data["job_ids"] = job_ids
                 cf.write_text(json.dumps(data, indent=2, ensure_ascii=False))
                 state["checkin_dirty"] = False
-                print(
-                    f"[message-analyzer] Check-in cron: {effective_delay} "
-                    f"(fire at {fire_at[:16]}, job={job_id})"
-                )
-            else:
-                err = result.stderr.strip()
-                print(f"[message-analyzer] Check-in cron failed (rc={result.returncode}): {err}")
         except FileNotFoundError:
             print("[message-analyzer] hermes CLI not on PATH — proactive reply not scheduled")
         except Exception as e:
@@ -870,10 +1693,7 @@ def register(ctx):
                 return
 
             print(f"[message-analyzer] async classify start: '{source_msg[:60]}'", flush=True)
-            result = classify_locally(source_msg)
-            if result:
-                print(f"[message-analyzer] local classify: {result}", flush=True)
-            elif state["can_classify"]:
+            if state["can_classify"]:
                 result = _classify_via_llm(source_msg, conversation_history)
             else:
                 result = None
@@ -884,22 +1704,30 @@ def register(ctx):
                     source_msg,
                     allow_checkin=(platform != "panel"),
                 )
+                _update_short_term_user_state(result, source_msg)
+                _update_state_base(result, source_msg)
+            _clear_consumed_short_state_if_needed(result)
 
             if platform == "panel":
                 return
 
             if (
                 source_msg
+                and result
                 and not source_msg.startswith("/")
                 and not state.get("checkin_dirty")
                 and _env_bool("HERMISS_PROACTIVE_CHECKIN_ENABLED", True)
             ):
-                state["check_in_hours"] = _choose_checkin_hours()
-                state["checkin_dirty"] = True
-                print(
-                    "[message-analyzer] Check-in refresh requested: "
-                    f"{state['check_in_hours']}h (adaptive)"
-                )
+                selected_minutes = _choose_checkin_minutes(result)
+                if selected_minutes > 0:
+                    state["check_in_minutes"] = selected_minutes
+                    state["check_in_hours"] = max(1, (selected_minutes + 59) // 60)
+                    state["checkin_followup_stage"] = 0
+                    state["checkin_dirty"] = True
+                    print(
+                        "[message-analyzer] Check-in refresh requested: "
+                        f"{selected_minutes}m (adaptive)"
+                    )
             if state.get("checkin_dirty"):
                 _schedule_checkin()
         except Exception as e:
@@ -940,24 +1768,34 @@ def register(ctx):
         if platform != "panel":
             _cancel_checkin()
             state["check_in_hours"] = 0
+            state["check_in_minutes"] = 0
+            state["checkin_followup_stage"] = 0
             state["checkin_dirty"] = False
         state["last_user_message"] = user_message
-        message_time = _local_time_text()
+        try:
+            current_local_dt = datetime.now(ZoneInfo(_env_value("TZ") or "Asia/Shanghai"))
+        except Exception:
+            current_local_dt = datetime.now(timezone.utc)
+        message_time = _local_time_text_for(current_local_dt)
+        activity_message = _compact_activity_text(user_message, 180)
         recent_context = _format_recent_context(conversation_history)
         recent_context_with_time = _format_recent_context(conversation_history, with_time=True)
         if recent_context:
-            state["recent_context"] = f"{recent_context}\nuser: {user_message}"
+            state["recent_context"] = f"{recent_context}\nuser: {activity_message}"
         else:
-            state["recent_context"] = f"user: {user_message}"
+            state["recent_context"] = f"user: {activity_message}"
         if recent_context_with_time:
-            state["recent_context_with_time"] = f"{recent_context_with_time}\n[{message_time}] user: {user_message}"
+            state["recent_context_with_time"] = f"{recent_context_with_time}\n[{message_time}] user: {activity_message}"
         else:
-            state["recent_context_with_time"] = f"[{message_time}] user: {user_message}"
-        state["last_activity_hint"] = user_message
+            state["recent_context_with_time"] = f"[{message_time}] user: {activity_message}"
+        state["last_activity_hint"] = activity_message
         state["last_user_message_at"] = message_time
 
         # Skip slash commands
         if user_message.startswith("/"):
+            command = user_message.split(maxsplit=1)[0].lower()
+            if command in {"/new", "/reset"}:
+                _clear_dynamic_state_base("session_reset")
             record_user_activity(user_id)
             silence_ctx = _build_silence_context(user_id)
             return {"context": silence_ctx} if silence_ctx else None
@@ -965,6 +1803,26 @@ def register(ctx):
         state["message_count"] += 1
         print(f"[message-analyzer] pre_llm_call: '{user_message[:60]}'")
         context_parts = [REALITY_BOUNDARY_CONTEXT]
+
+        # Only new sessions need this fallback. Existing sessions already carry
+        # recent conversation history with timestamps, so avoid extra token use.
+        if bool(is_first_turn):
+            context_parts.append(
+                _build_temporal_guard_context(
+                    conversation_history,
+                    current_local_dt,
+                    bool(is_first_turn),
+                    str(session_id or ""),
+                )
+            )
+
+        state_base_context = _build_state_base_context(user_message, current_local_dt)
+        if state_base_context:
+            context_parts.append(state_base_context)
+
+        short_state_context = _build_short_term_state_context(user_message, current_local_dt)
+        if short_state_context:
+            context_parts.append(short_state_context)
 
         # ── Step 1: Retrieve memories before the main reply ─────
         memory_context = build_full_context(db, user_message)
@@ -980,6 +1838,10 @@ def register(ctx):
         silence_ctx = _build_silence_context(user_id)
         if silence_ctx:
             context_parts.append(silence_ctx)
+
+        style_guard_ctx = _build_output_style_guard_context()
+        if style_guard_ctx:
+            context_parts.append(style_guard_ctx)
 
         record_user_activity(user_id)
 
@@ -1094,6 +1956,8 @@ def register(ctx):
             last_emotion=state.get("last_emotion"),
         )
         state["check_in_hours"] = 0  # Reset for next session
+        state["check_in_minutes"] = 0
+        state["checkin_followup_stage"] = 0
         state["message_count"] = 0
         print(f"[message-analyzer] Session ended: {session_id}")
 

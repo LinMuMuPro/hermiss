@@ -571,10 +571,14 @@ print('OK')
     return name
 
 
-def update_config_model(container_name: str, provider: str, model: str, base_url: str) -> bool:
+def update_config_model(container_name: str, provider: str, model: str, base_url: str, supports_vision: bool = True) -> bool:
     """用 hermes config set 更新 model 段"""
     ok = True
-    for key, val in [("model.default", model), ("model.provider", provider)]:
+    for key, val in [
+        ("model.default", model),
+        ("model.provider", provider),
+        ("model.supports_vision", "true" if supports_vision else "false"),
+    ]:
         result = exec_in_container(
             container_name,
             f"hermiss --profile hermiss config set {shlex.quote(key)} {shlex.quote(val)} 2>&1",

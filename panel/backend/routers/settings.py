@@ -648,6 +648,7 @@ def get_model_config(token: str = Depends(get_token), db: Session = Depends(get_
     user = get_current_user(token, db)
     has_key = False
     base_url = ""
+    supports_vision = True
     if user.container_id:
         try:
             env = docker_svc.read_file(user.container_id, "/root/.hermes/profiles/hermiss/.env")
@@ -659,7 +660,23 @@ def get_model_config(token: str = Depends(get_token), db: Session = Depends(get_
                 elif line.startswith("CUSTOM_BASE_URL="):
                     base_url = line.split("=",1)[1].strip()
         except: pass
-    return {"provider": user.model_provider or "deepseek", "model": user.model_name or "deepseek-v4-flash", "has_key": has_key, "base_url": base_url}
+        try:
+            cfg_text = docker_svc.read_file(user.container_id, "/root/.hermes/profiles/hermiss/config.yaml")
+            cfg = yaml.safe_load(cfg_text) or {}
+            raw_supports_vision = (cfg.get("model") or {}).get("supports_vision")
+            if isinstance(raw_supports_vision, bool):
+                supports_vision = raw_supports_vision
+            elif isinstance(raw_supports_vision, str):
+                supports_vision = raw_supports_vision.strip().lower() in {"1", "true", "yes", "on"}
+        except Exception:
+            pass
+    return {
+        "provider": user.model_provider or "deepseek",
+        "model": user.model_name or "deepseek-v4-flash",
+        "has_key": has_key,
+        "base_url": base_url,
+        "supports_vision": supports_vision,
+    }
 
 
 @router.post("/model/test")
@@ -705,7 +722,8 @@ def update_model(data: ModelConfig, token: str = Depends(get_token), db: Session
 
     docker_svc.update_config_model(user.container_id, config_provider,
                                     data.model or "deepseek-v4-flash",
-                                    data.base_url or "")
+                                    data.base_url or "",
+                                    True)
 
     user.model_provider = data.provider; user.model_name = data.model
     if data.api_key:
@@ -714,7 +732,7 @@ def update_model(data: ModelConfig, token: str = Depends(get_token), db: Session
     docker_svc.restart_container(user.container_id)
     from operation_log import log_action
     log_action(user.email, "update_model", f"container:{user.container_id}", f"{data.provider}/{data.model}", user.container_id)
-    return {"status": "updated", "provider": data.provider, "model": data.model}
+    return {"status": "updated", "provider": data.provider, "model": data.model, "supports_vision": True}
 
 
 @router.post("/api-key")
