@@ -125,6 +125,13 @@ def _install_message_analyzer_plugin(container_name: str) -> None:
             str(resource_dir),
             "/root/.hermes/profiles/hermiss/plugins/message-analyzer",
         )
+    hook_dir = Path(__file__).resolve().parents[1] / "resources" / "session-reset-hook"
+    if hook_dir.exists():
+        copy_dir_to_container(
+            container_name,
+            str(hook_dir),
+            "/root/.hermes/hooks/hermiss-session-reset",
+        )
 
 
 def _install_default_persona(container_name: str) -> None:

@@ -1118,24 +1118,59 @@ def register(ctx):
             if frequency in {"降低", "low", "less", "reduce", "reduced"}:
                 state["checkin_frequency"] = "low"
 
-            if llm_minutes <= 0 and llm_hours <= 0:
-                state["checkin_style_hint"] = "LLM 本轮未建议主动回访；不创建主动消息任务。"
-                return 0
+            llm_no_checkin = llm_minutes <= 0 and llm_hours <= 0
+            if llm_no_checkin:
+                state["checkin_style_hint"] = "LLM did not request a normal proactive follow-up; if a short-term state has an ETA, schedule one fallback check-in after the ETA."
+        else:
+            llm_no_checkin = False
 
         if re.search(r"别.*(主动|回访|问|找|打扰)|不用.*(主动|回访|问|找)|太频繁|太烦|少.*(主动|问|找)|安静点|别打扰", text):
             state["checkin_frequency"] = "low"
             style_hint = "用户觉得主动回访可能过于频繁；后续主动消息必须明显降频、少打扰、低压力。"
 
         short_state = state.get("short_term_user_state")
+        fallback_from_state = False
         if llm_minutes > 0:
             selected = llm_minutes
-        elif isinstance(short_state, dict) and str(short_state.get("text") or "").strip():
-            expected = _short_state_expected_minutes(short_state.get("expected_minutes"))
-            explicit_short_eta = expected <= 30
-            if expected <= 15:
-                selected = max(8, min(expected + 10, 30))
-            else:
-                selected = max(15, min(expected + 15, 120))
+        else:
+            result_short_state = ""
+            result_short_text = ""
+            result_expected = 0
+            if isinstance(result, dict):
+                result_short_state = str(result.get("short_state") or "").strip().lower()
+                result_short_text = str(result.get("short_state_text") or "").strip()
+                try:
+                    result_expected = int(result.get("short_state_minutes") or 0)
+                except Exception:
+                    result_expected = 0
+            if result_short_state in {"start", "continue", "??", "??"} and result_short_text and result_expected > 0:
+                expected = _short_state_expected_minutes(result_expected)
+                explicit_short_eta = expected <= 30
+                selected = max(min_minutes, min(expected + max(5, min(15, expected // 3 or 5)), max_minutes))
+                fallback_from_state = True
+                unavailable = str(result.get("short_state_unavailable") or "").strip().lower() if isinstance(result, dict) else ""
+                state["checkin_fallback_eta"] = True
+                state["checkin_fallback_unavailable"] = unavailable in {"yes", "true", "1", "?"}
+                state["checkin_style_hint"] = (
+                    "Explicit short-state ETA fallback: the LLM did not request a normal proactive follow-up, "
+                    "but it identified a short-term state with an ETA. If the user appears awake from recent context, "
+                    "ask one light progress/status question after the ETA; do not feel frequent or intrusive."
+                )
+            elif isinstance(short_state, dict) and str(short_state.get("text") or "").strip():
+                expected = _short_state_expected_minutes(short_state.get("expected_minutes"))
+                explicit_short_eta = expected <= 30
+                if expected <= 15:
+                    selected = max(8, min(expected + 10, 30))
+                else:
+                    selected = max(15, min(expected + 15, 120))
+                fallback_from_state = True
+                state["checkin_fallback_eta"] = False
+                state["checkin_fallback_unavailable"] = False
+
+        if llm_minutes <= 0 and llm_hours <= 0 and not fallback_from_state:
+            state["checkin_fallback_eta"] = False
+            state["checkin_fallback_unavailable"] = False
+            return 0
 
         if llm_minutes <= 0 and re.search(r"外卖|点了.*粉|点了.*饭|点了.*面|等.*吃|等.*餐|配送|骑手|螺蛳粉|黄焖鸡|奶茶|咖啡", text):
             if not explicit_short_eta:
@@ -1457,7 +1492,12 @@ def register(ctx):
         state_base_snapshot = _state_base_snapshot()
         scene_text = f"{recent_context}\\n{last_activity_hint}"
         style_hint = state.get("checkin_style_hint") or _activity_style_hint(scene_text)[0]
-        fire_at_dt, style_hint, quiet_delayed = _quiet_hour_policy(fire_at_dt, style_hint, scene_text)
+        skip_quiet_delay = bool(state.get("checkin_fallback_eta")) and not bool(state.get("checkin_fallback_unavailable")) and check_in_minutes <= 120
+        if skip_quiet_delay:
+            quiet_delayed = False
+            style_hint = f"{style_hint} This is an explicit short-state ETA fallback; do not delay it to morning solely because of quiet hours."
+        else:
+            fire_at_dt, style_hint, quiet_delayed = _quiet_hour_policy(fire_at_dt, style_hint, scene_text)
         fire_at = fire_at_dt.isoformat()
         local_time = _local_time_text()
         trigger_local_time = _local_time_text_for(fire_at_dt)
@@ -1533,7 +1573,7 @@ def register(ctx):
             f"Use it only as emotional background, then send a current, non-jarring check-in such as asking how the rest of their day/evening went. "
             f"Avoid words like '刚才', '刚刚', '还', or any phrasing that implies the old message happened moments ago.\n\n"
             f"If trigger_local_time is late night or early morning and there is no explicit evidence the user is awake, assume they may be sleeping or will see it later. "
-            f"During late night or early morning, do NOT ask any question at all. Do not ask what they are doing, how work/study went, progress/result, or whether they are okay. "
+            f"During late night or early morning, if there is no explicit evidence the user is awake or waiting for a short ETA fallback, do NOT ask any question at all. Do not ask what they are doing, how work/study went, progress/result, or whether they are okay. "
             f"Do NOT say '醒了吗', '这么早就醒了', '还没睡', or imply the user is awake. "
             f"Send a non-demanding message that can be read later: express missing, warmth, quiet companionship, or a soft good-night style feeling. Avoid question marks. "
             f"If the user was doing a specific activity where they may not look at the phone (for example exam, class, gym, workout, study, work, meeting, driving, shower, sleep/rest, movie/show, travel, or going out), only ask about progress/result when trigger_local_time is NOT late night or early morning. "
@@ -1739,6 +1779,7 @@ def register(ctx):
         """Session start: cancel active check-in, dispatch pending reminders."""
         if platform in {"cron", "panel"}:
             return
+        _clear_dynamic_state_base("session_start")
         _cancel_checkin()
         _dispatch_reminders()
 

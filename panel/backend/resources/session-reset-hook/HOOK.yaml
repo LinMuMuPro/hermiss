@@ -1,0 +1,6 @@
+name: hermiss-session-reset
+description: Clear Hermiss dynamic state when a conversation is reset.
+events:
+  - session:reset
+  - command:new
+  - command:reset
