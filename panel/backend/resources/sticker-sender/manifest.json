@@ -1,6 +1,6 @@
 {
   "name": "sticker-sender",
-  "version": "2026.07.19.1",
+  "version": "2026.07.20.1",
   "schema_version": 1,
   "entry": "__init__.py",
   "requires_restart": true,
