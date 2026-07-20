@@ -57,6 +57,8 @@ CLASSIFY_PROMPT = """[HERMES ANALYSIS — 只做分类，不要回复用户]
 - 短期状态用于下一轮对话连续性，不是长期记忆。它必须独立于“记忆”判断：即使记忆=无，也仍然要判断短期状态
 - 用户表达接下来要做、正在做、准备做、刚进入某种状态时，输出短期状态=开始或持续。例：我要去洗澡了、一会考试、准备休息。除此之外不要依赖固定场景词表，由上下文自行判断。
 - 用户表达活动结束、返回、完成、放弃、醒来时，输出短期状态=结束。例：回来了、做完了、睡醒了。其他表达由上下文判断。
+- 如果上下文或“当前已有短期状态”显示用户正在做某件事，用户中途又发来一句普通聊天、吐槽、战况、情绪、问答或简短回应，不代表状态结束或切换；应输出短期状态=持续，并尽量沿用原来的状态内容。只有用户明确说活动结束、回来了、放弃了，或明确开始另一个互斥活动，才输出结束或新的开始。
+- 不要把正在活动中的一条中途消息改写成新的短期状态。例：用户说“我去打游戏”，期间又说“这把好难/赢了/你在干嘛”，仍然是“用户正在打游戏”，不是“用户正在聊天/用户赢了/用户在问你”。
 - 用户只是表达情绪、寒暄、普通问答，没有可延续活动或明确状态，才输出短期状态=无。例：想你了、哈哈、你是谁。
 - 短期状态内容要概括成“用户准备/正在……”，不要写成长篇分析；状态预计分钟由上下文估计，不确定填 60-90。
 - 状态底座是“当前对话的简易记忆底座”，不是长期记忆。它只记录最近一两轮对当前回复有用的状态、情绪、关系氛围和禁忌，必须短、准、克制。
@@ -301,11 +303,19 @@ def _classification_with_memories(
     }
 
 
-def build_classify_prompt(message: str, user_name: str = "", recent_context: str = "") -> str:
+def build_classify_prompt(
+    message: str,
+    user_name: str = "",
+    recent_context: str = "",
+    current_short_state: str = "",
+    current_local_time: str = "",
+) -> str:
     """Build a classification prompt for a single user message."""
     user_context = f"Known user name from profile: {user_name}\n" if user_name else ""
+    time_context = f"Current local time: {current_local_time}\n" if current_local_time else ""
     context_block = f"Recent conversation context (oldest to newest):\n{recent_context}\n\n" if recent_context else ""
-    return f"""{user_context}{context_block}User message to classify (classify ONLY this final user message):
+    short_state_block = f"Current short-term user state before this message:\n{current_short_state}\n\n" if current_short_state else ""
+    return f"""{user_context}{time_context}{context_block}{short_state_block}User message to classify (classify ONLY this final user message):
 {message}
 
 Important disambiguation rules:
@@ -315,6 +325,8 @@ Important disambiguation rules:
 4. Never convert an assistant name or nickname into a user-name memory, and never convert the assistant's wording into a user preference.
 5. If a new explicit user-name memory conflicts with an older user-name memory, prefer the latest explicit statement.
 6. Output memory entries in the same natural language as the conversation; the labels above are semantic guidance, not required literal output.
+7. If Current short-term user state exists, treat the final user message as possibly sent while the user is still doing that activity. Do not replace or end that state unless the user clearly says the activity ended, returned, gave up, or started a mutually exclusive new activity.
+8. Current local time is authoritative for time-of-day. Do not infer "morning/early morning" just because the user says they woke up; if local time is evening/night, describe it as evening/night or simply "刚醒".
 
 {CLASSIFY_PROMPT}"""
 

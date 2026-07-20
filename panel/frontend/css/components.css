@@ -330,6 +330,51 @@
   overflow: hidden;
 }
 
+#page-chat .settings-single-column {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+}
+
+#page-chat .short-state-card {
+  flex: 0 0 auto;
+}
+
+.chat-page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+.chat-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-width: 0;
+}
+
+.chat-title-row h2 {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.chat-title-row .page-subtitle {
+  margin: 0;
+  color: var(--text2);
+  font-size: .9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-page-head .btn {
+  flex: 0 0 auto;
+}
+
 /* ── Cards ── */
 .card {
   background: var(--surface);
@@ -354,45 +399,72 @@
 
 /* ── Chat window ── */
 .short-state-card {
-  margin-bottom: 12px;
-  padding: 16px 18px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
 }
 
 .short-state-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 12px;
+  gap: 10px;
+  margin-bottom: 6px;
 }
 
 .short-state-head h3 {
-  margin: 0 0 4px;
-  font-size: 1rem;
+  margin: 0 0 2px;
+  font-size: .94rem;
 }
 
 .short-state-head p {
-  margin: 0;
-  color: var(--text3);
-  font-size: .86rem;
-  line-height: 1.6;
+  display: none;
 }
 
 .short-state-body {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 12px 14px;
+  padding: 7px 9px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--bg) 72%, var(--surface));
 }
 
+.short-state-compact {
+  display: grid;
+  gap: 5px;
+}
+
+.short-state-line {
+  display: grid;
+  grid-template-columns: minmax(112px, 170px) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: .74rem;
+  line-height: 1.38;
+}
+
+.short-state-line.primary {
+  grid-template-columns: auto minmax(112px, 170px) minmax(0, 1fr);
+}
+
+.short-state-line strong {
+  color: var(--text2);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.short-state-line em {
+  min-width: 0;
+  color: var(--text);
+  font-style: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .short-state-main {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -404,17 +476,17 @@
 }
 
 .short-state-main p {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   color: var(--text3);
-  font-size: .82rem;
-  line-height: 1.5;
+  font-size: .78rem;
+  line-height: 1.4;
 }
 
 .short-state-dot {
   flex: 0 0 auto;
-  width: 9px;
-  height: 9px;
-  margin-top: 5px;
+  width: 8px;
+  height: 8px;
+  margin-top: 0;
   border-radius: 999px;
   background: var(--text3);
 }
@@ -431,19 +503,17 @@
 
 .short-state-meta {
   display: flex;
-  flex: 0 0 auto;
   flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
 }
 
 .short-state-meta span {
-  padding: 5px 9px;
+  padding: 4px 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
   color: var(--text2);
   background: var(--surface);
-  font-size: .78rem;
+  font-size: .74rem;
   white-space: nowrap;
 }
 
@@ -619,6 +689,33 @@
   #page-chat.active {
     height: calc(100vh - 88px);
   }
+
+  .chat-page-head,
+  .chat-title-row,
+  .cron-page-head,
+  .cron-title-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .chat-title-row .page-subtitle {
+    white-space: normal;
+  }
+
+  .cron-title-row .page-subtitle {
+    white-space: normal;
+  }
+
+  .cron-checkin-card {
+    grid-template-columns: 1fr;
+  }
+
+  .cron-checkin-line {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
 
   .short-state-head,
   .short-state-body {
@@ -1958,56 +2055,128 @@ td.mono {
 }
 
 /* ── Cron / proactive tasks ── */
+.cron-page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+.cron-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-width: 0;
+}
+
+.cron-title-row h2 {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.cron-title-row .page-subtitle {
+  margin: 0;
+  color: var(--text2);
+  font-size: .9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cron-page-head .btn {
+  flex: 0 0 auto;
+}
+
+.cron-checkin-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 14px;
+  row-gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface));
+}
+
+.cron-checkin-line {
+  display: grid;
+  grid-template-columns: minmax(112px, 150px) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: .76rem;
+  line-height: 1.42;
+}
+
+.cron-checkin-line strong {
+  color: var(--text2);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.cron-checkin-line em {
+  min-width: 0;
+  color: var(--text);
+  font-style: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cron-summary-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin-top: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .cron-summary-item {
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 14px;
+  border-radius: 10px;
+  padding: 9px 10px;
   background: var(--surface2);
 }
 
 .cron-summary-item span {
   display: block;
   color: var(--text2);
-  font-size: 13px;
-  margin-bottom: 8px;
+  font-size: 12px;
+  margin-bottom: 4px;
 }
 
 .cron-summary-item strong {
   color: var(--text);
-  font-size: 15px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.35;
   word-break: break-word;
 }
 
 .cron-context-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
-  margin-top: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .cron-context-grid > div {
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 14px;
+  border-radius: 10px;
+  padding: 9px 10px;
   background: var(--surface);
 }
 
 .cron-context-grid h4 {
-  margin: 0 0 8px;
-  font-size: 15px;
+  margin: 0 0 5px;
+  font-size: 13px;
 }
 
 .cron-context-grid p {
-  margin: 0 0 8px;
-  line-height: 1.65;
+  margin: 0;
+  color: var(--text2);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
 }
 
 .cron-table-wrap td {

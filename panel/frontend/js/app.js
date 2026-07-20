@@ -24,6 +24,8 @@ const userNavItems = [
   { route: 'persona', label: '人设', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="5" r="2"/><path d="M2 14c0-2.2 1.8-4 4-4 2.2 0 4 1.8 4 4"/><circle cx="10" cy="4" r="1.5"/><path d="M12 7.5c1.1 0 2 .9 2 2v2"/></svg>' },
   { route: 'memory', label: '记忆', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="1.5"/><path d="M5 7h6M5 10h4"/></svg>' },
   { route: 'stickers', label: '表情包', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M5.5 6.5h.01M10.5 6.5h.01M5.5 9.5c1.2 1.3 3.8 1.3 5 0" stroke-linecap="round"/></svg>' },
+  { route: 'chat', label: '聊天窗口', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3h10v7H6l-3 3V3z"/><path d="M5.5 6h5M5.5 8h3"/></svg>' },
+  { route: 'cron', label: '定时任务', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>' },
   { route: 'settings', label: '设置', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="3"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.1 3.1l1 1M11.9 11.9l1 1M3.1 12.9l1-1M11.9 4.1l1-1"/></svg>' },
 ];
 

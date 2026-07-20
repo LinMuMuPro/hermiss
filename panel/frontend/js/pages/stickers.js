@@ -39,6 +39,9 @@ window.Pages.stickers = async function(el) {
     return label ? `${raw}（${label}）` : raw;
   };
   const intentOptions = (selected) => intents.map(intent => `<option value="${escapeHtml(intent)}" ${intent === selected ? 'selected' : ''}>${escapeHtml(displayIntent(intent))}</option>`).join('');
+  const refreshStickers = async () => {
+    await window.Pages.stickers(el);
+  };
 
   const renderThumb = (item) => `
     <button class="sticker-thumb ${item.exists ? '' : 'missing'}" data-path="${escapeHtml(item.path)}" title="${escapeHtml(item.path || '')}">
@@ -69,7 +72,7 @@ window.Pages.stickers = async function(el) {
 
   const renderIntentCard = (intent) => {
     const row = summary.find(x => x.intent === intent) || { count: 0, missing: 0 };
-    const items = assets.filter(x => x.intent === intent);
+    const items = assets.filter(x => x.intent === intent && x.exists);
     const visibleItems = items.slice(0, PREVIEW_LIMIT);
     const hiddenCount = Math.max(0, items.length - visibleItems.length);
     return `
@@ -96,7 +99,7 @@ window.Pages.stickers = async function(el) {
   };
 
   const renderGalleryModals = () => intents.map(intent => {
-    const items = assets.filter(x => x.intent === intent);
+    const items = assets.filter(x => x.intent === intent && x.exists);
     return `
       <div class="sticker-gallery-overlay" data-intent="${escapeHtml(intent)}" hidden>
         <div class="sticker-gallery-card">
@@ -266,7 +269,7 @@ window.Pages.stickers = async function(el) {
     nextConfig.intents[intent] = nextConfig.intents[intent] || [];
     await api('/api/settings/stickers', { method: 'POST', body: JSON.stringify({ config: nextConfig }) });
     toast('分类已创建', 'ok');
-    navigate('stickers');
+    await refreshStickers();
   });
 
   document.querySelectorAll('.sticker-upload').forEach(input => {
@@ -280,7 +283,8 @@ window.Pages.stickers = async function(el) {
           body: JSON.stringify({ intent: this.dataset.intent, filename: file.name, data_url: dataUrl, weight: 1 }),
         });
         toast('表情包已上传', 'ok');
-        navigate('stickers');
+        this.value = '';
+        await refreshStickers();
       } catch (e) {
         toast(e.message || '上传失败', 'err');
       }
@@ -334,7 +338,7 @@ window.Pages.stickers = async function(el) {
           body: JSON.stringify({ intent }),
         });
         toast('分类已更新', 'ok');
-        navigate('stickers');
+        await refreshStickers();
       } catch (e) { toast(e.message, 'err'); }
     });
   });
@@ -346,7 +350,7 @@ window.Pages.stickers = async function(el) {
       try {
         await api(`/api/settings/stickers/assets?path=${encodeURIComponent(this.dataset.path)}`, { method: 'DELETE' });
         toast('表情包已删除', 'ok');
-        navigate('stickers');
+        await refreshStickers();
       } catch (e) { toast(e.message, 'err'); }
     });
   });
@@ -362,7 +366,7 @@ window.Pages.stickers = async function(el) {
           body: JSON.stringify({ new_intent: newIntent }),
         });
         toast('分类已重命名', 'ok');
-        navigate('stickers');
+        await refreshStickers();
       } catch (e) { toast(e.message, 'err'); }
     });
   });

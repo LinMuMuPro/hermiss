@@ -1,0 +1,8 @@
+{
+  "name": "message-analyzer",
+  "version": "2026.07.19.1",
+  "schema_version": 1,
+  "entry": "__init__.py",
+  "requires_restart": true,
+  "description": "Hermiss memory, short-term state, semantic recall and proactive reply plugin."
+}

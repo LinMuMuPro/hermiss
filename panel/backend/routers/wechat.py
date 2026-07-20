@@ -10,6 +10,7 @@ from models.user import User
 from routers.auth import get_current_user
 from dependencies import get_db
 from config import MOCK_MODE, HERMES_PROFILE_NAME
+from services.runtime_status_service import build_wechat_health
 
 router = APIRouter(prefix="/api/wechat", tags=["wechat"])
 
@@ -116,61 +117,28 @@ def _container_wechat_health(user: User) -> dict:
         return {"connected": bool(user.wechat_bound), "state": "mock", "log": "mock mode"}
     if not user.container_id:
         return {"connected": False, "state": "no_container", "log": "container not created"}
-
-    from services import docker_service as docker_svc
-
-    env_text = docker_svc.read_file(user.container_id, "/root/.hermes/profiles/hermiss/.env")
-    env_values = {}
-    for line in env_text.splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            key, value = line.split("=", 1)
-            env_values[key.strip()] = value.strip()
-
-    state_raw = docker_svc.read_file(user.container_id, "/root/.hermes/profiles/hermiss/gateway_state.json")
-    gateway = {}
-    try:
-        gateway = json.loads(state_raw or "{}")
-    except Exception:
-        gateway = {}
-    weixin = (gateway.get("platforms") or {}).get("weixin") or {}
-    platform_state = str(weixin.get("state") or "unknown")
-    error_message = weixin.get("error_message") or weixin.get("error_code") or ""
-    token_ok = bool(env_values.get("WEIXIN_TOKEN"))
-    account_id = env_values.get("WEIXIN_ACCOUNT_ID") or user.wechat_account_id or ""
-    connected = token_ok and platform_state == "connected"
-
-    log = docker_svc.read_file(user.container_id, "/root/.hermes/profiles/hermiss/logs/gateway.log")
-    interesting = []
-    for line in log.splitlines()[-160:]:
-        lower = line.lower()
-        if any(key in lower for key in ("weixin", "ilink", "session", "token", "error", "connected", "disconnected")):
-            interesting.append(line)
-    return {
-        "connected": connected,
-        "state": platform_state,
-        "account_id": account_id,
-        "token_configured": token_ok,
-        "gateway_state": gateway.get("gateway_state") or "unknown",
-        "updated_at": weixin.get("updated_at") or gateway.get("updated_at") or "",
-        "error": str(error_message or ""),
-        "log": "\n".join(interesting[-30:]) or "暂无微信连接日志",
-    }
+    health = build_wechat_health(user, include_log=True)
+    health["state"] = health.get("platform_state") or "unknown"
+    return health
 
 
 @router.get("/status")
 def wechat_status(token: str = Depends(get_token), db: Session = Depends(get_db)):
     user = get_current_user(token, db)
     health = _container_wechat_health(user)
-    bound = bool(user.wechat_bound and health.get("token_configured"))
+    bound = bool(health.get("bound") or health.get("token_configured"))
     return {
         "bound": bound,
         "account_id": health.get("account_id") or user.wechat_account_id or "",
-        "container_status": user.container_status or "unknown",
+        "container_status": health.get("container_status") or user.container_status or "unknown",
         "connected": bool(health.get("connected")),
         "connection_state": health.get("state") or "unknown",
         "gateway_state": health.get("gateway_state") or "unknown",
         "updated_at": health.get("updated_at") or "",
         "error": health.get("error") or "",
+        "source": health.get("source") or "unknown",
+        "db_bound": bool(health.get("db_bound")),
+        "inconsistent": bool(health.get("inconsistent")),
     }
 
 

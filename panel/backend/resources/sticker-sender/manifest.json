@@ -1,0 +1,8 @@
+{
+  "name": "sticker-sender",
+  "version": "2026.07.19.1",
+  "schema_version": 1,
+  "entry": "__init__.py",
+  "requires_restart": true,
+  "description": "Hermiss local sticker intent parser and media sender plugin."
+}
