@@ -23,6 +23,7 @@ import re
 import sqlite3
 import subprocess
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -233,11 +234,15 @@ def register(ctx):
     """Plugin entry point — called by Hermes PluginManager."""
 
     # ── Init ────────────────────────────────────────────────────
+    profile = os.environ.get("HERMES_PROFILE", "hermiss")
     try:
         from hermes_constants import get_hermes_home
         hermes_home = Path(get_hermes_home())
     except ImportError:
         hermes_home = Path.home() / ".hermes"
+    profile_home = hermes_home / "profiles" / profile
+    if profile_home.exists() and not (hermes_home / "config.yaml").exists():
+        hermes_home = profile_home
 
     def _profile_env_value(name: str) -> str | None:
         env_path = hermes_home / ".env"
@@ -274,6 +279,17 @@ def register(ctx):
         except Exception:
             return default
 
+    def _runtime_mode() -> str:
+        raw = os.environ.get("HERMISS_RUNTIME_MODE") or _profile_env_value("HERMISS_RUNTIME_MODE") or "companion"
+        normalized = str(raw).strip().lower()
+        if normalized in {"roleplay", "role_play", "story", "rp", "剧情", "剧情扮演", "剧情扮演模式"}:
+            return "roleplay"
+        return "companion"
+
+    if _runtime_mode() == "roleplay":
+        print("[message-analyzer] roleplay mode: dynamic memory, state base and proactive check-ins disabled")
+        return
+
     db_path = hermes_home / "memory" / "hermes_memory.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     db = MemoryDB(db_path)
@@ -292,7 +308,6 @@ def register(ctx):
         or callable(getattr(llm_client, "complete_structured", None))
     )
 
-    profile = os.environ.get("HERMES_PROFILE", "uino_c")
     deliver = os.environ.get("HERMES_DELIVER", "weixin")
 
     try:
@@ -375,7 +390,10 @@ def register(ctx):
             if isinstance(current_state, dict) and str(current_state.get("text") or "").strip():
                 payload["status"] = "active"
                 payload["state"] = current_state
-            if isinstance(current_base, dict) and str(current_base.get("summary") or "").strip():
+            if isinstance(current_base, dict) and (
+                str(current_base.get("current_state") or "").strip()
+                or str(current_base.get("summary") or "").strip()
+            ):
                 payload["status"] = "active"
             short_state_file.parent.mkdir(parents=True, exist_ok=True)
             short_state_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -607,6 +625,56 @@ def register(ctx):
             state["current_session_id"] = next_session_id
             _clear_dynamic_state_base(reason)
 
+    def _latest_interactive_session() -> dict | None:
+        state_db = hermes_home / "state.db"
+        if not state_db.exists():
+            return None
+        try:
+            with sqlite3.connect(str(state_db)) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    """
+                    SELECT id, source, COALESCE(message_count, 0) AS message_count, started_at, ended_at
+                    FROM sessions
+                    WHERE source IS NULL OR source NOT LIKE 'cron%'
+                    ORDER BY started_at DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+            return dict(row) if row else None
+        except Exception as e:
+            print(f"[message-analyzer] session watcher query failed: {e}", flush=True)
+            return None
+
+    def _start_session_watcher() -> None:
+        def _watch() -> None:
+            while True:
+                try:
+                    latest = _latest_interactive_session()
+                    latest_id = str((latest or {}).get("id") or "")
+                    if latest_id and latest_id != str(state.get("current_session_id") or ""):
+                        message_count = int((latest or {}).get("message_count") or 0)
+                        state["current_session_id"] = latest_id
+                        if message_count <= 0:
+                            _clear_dynamic_state_base("empty_session_created")
+                            print(
+                                "[message-analyzer] Empty new session detected; dynamic state cleared: "
+                                f"{latest_id}",
+                                flush=True,
+                            )
+                        else:
+                            _persist_short_term_user_state("session_watcher_sync")
+                    time.sleep(2)
+                except Exception as e:
+                    print(f"[message-analyzer] session watcher failed: {e}", flush=True)
+                    time.sleep(5)
+
+        threading.Thread(
+            target=_watch,
+            daemon=True,
+            name="message-analyzer-session-watcher",
+        ).start()
+
     def _update_short_term_user_state(result: dict | None, source_msg: str) -> None:
         if not isinstance(result, dict):
             return
@@ -666,10 +734,9 @@ def register(ctx):
         if not isinstance(current_base, dict):
             current_base = {}
 
-        summary = _clean_state_base_text(result.get("state_base_summary"), 180)
+        inferred_state = _clean_state_base_text(result.get("state_base_summary"), 120)
         mood = _clean_state_base_text(result.get("state_base_mood"), 140)
         caution = _clean_state_base_text(result.get("state_base_caution"), 180)
-        source = _clean_state_base_text(_compact_activity_text(source_msg, 160), 160)
 
         emotion = str(result.get("emotion") or "neutral").strip().lower()
         emotion_map = {
@@ -692,11 +759,18 @@ def register(ctx):
             current_base["current_state"] = short_text
         elif short_state in {"end", "ended", "finish", "finished"}:
             current_base["current_state"] = ""
+        elif inferred_state:
+            current_base["current_state"] = inferred_state
 
-        if summary:
-            current_base["summary"] = summary
-        elif source:
-            current_base["summary"] = f"用户刚才说：{source}"
+        current_state_text = _clean_state_base_text(current_base.get("current_state"), 120)
+        if current_state_text:
+            current_base["summary"] = current_state_text
+        elif inferred_state:
+            current_base["summary"] = inferred_state
+        else:
+            current_base["summary"] = "用户现在正在与你闲聊"
+
+        current_base["state_at"] = now.isoformat()
 
         if recent_emotion:
             current_base["recent_emotion"] = recent_emotion
@@ -708,7 +782,7 @@ def register(ctx):
         if caution:
             current_base["caution"] = caution
 
-        current_base["last_user_message"] = source
+        current_base.pop("last_user_message", None)
         current_base["updated_at"] = now.isoformat()
         state["state_base"] = {
             key: value
@@ -1106,13 +1180,12 @@ if not base:
 if not isinstance(base, dict):
     base = {}
 
-last_user_message = compact(base.get('last_user_message') or active.get('last_activity_hint') or '')
-base['summary'] = '???????????????????????????????????????'
-base['relationship_mood'] = compact(base.get('relationship_mood') or '????')
-base['caution'] = '??????????????????????????????????????'
-if last_user_message:
-    base['last_user_message'] = last_user_message
-base.pop('current_state', None)
+base['current_state'] = '用户暂时没有回复主动消息'
+base['summary'] = '用户暂时没有回复主动消息'
+base['state_at'] = now
+base['relationship_mood'] = compact(base.get('relationship_mood') or '安静')
+base['caution'] = '不要连续催问；下一次回访要更轻、更少打扰'
+base.pop('last_user_message', None)
 base['updated_at'] = now
 
 state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1415,7 +1488,7 @@ active_file.write_text(json.dumps(active, ensure_ascii=False, indent=2), encodin
 
     def _on_session_start(session_id, model, platform):
         """Session start: cancel active check-in, dispatch pending reminders."""
-        if platform in {"cron", "panel"}:
+        if platform == "cron":
             return
         state["current_session_id"] = str(session_id or "")
         _clear_dynamic_state_base("session_start")
@@ -1445,16 +1518,13 @@ active_file.write_text(json.dumps(active, ensure_ascii=False, indent=2), encodin
             return {"context": silence_ctx} if silence_ctx else None
 
         user_message = user_message.strip()
-        if platform != "panel" and (
-            is_first_turn or str(session_id or "") != str(state.get("current_session_id") or "")
-        ):
+        if is_first_turn or str(session_id or "") != str(state.get("current_session_id") or ""):
             _set_current_session(session_id, "session_first_turn")
-        if platform != "panel":
-            _cancel_checkin()
-            state["check_in_hours"] = 0
-            state["check_in_minutes"] = 0
-            state["checkin_followup_stage"] = 0
-            state["checkin_dirty"] = False
+        _cancel_checkin()
+        state["check_in_hours"] = 0
+        state["check_in_minutes"] = 0
+        state["checkin_followup_stage"] = 0
+        state["checkin_dirty"] = False
         state["last_user_message"] = user_message
         try:
             current_local_dt = datetime.now(ZoneInfo(_env_value("TZ") or "Asia/Shanghai"))
@@ -1654,6 +1724,7 @@ active_file.write_text(json.dumps(active, ensure_ascii=False, indent=2), encodin
 
     # ── Web Panel ──────────────────────────────────────────────
     _start_web_panel(db_path)
+    _start_session_watcher()
 
     print(
         f"[message-analyzer] v1.0 registered "

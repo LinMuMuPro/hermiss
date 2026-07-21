@@ -27,23 +27,23 @@ def build_state_base_context(
     if state_text:
         lines.append(f"- 当前状态: {state_text}")
     for label, key in (
+        ("当前状态", "current_state"),
         ("状态摘要", "summary"),
         ("最近情绪", "recent_emotion"),
         ("关系氛围", "relationship_mood"),
         ("回复注意", "caution"),
-        ("最近用户消息", "last_user_message"),
     ):
         value = clean_state_base_text(current_base.get(key), 180)
         if value:
             lines.append(f"- {label}: {value}")
-    updated_raw = str(current_base.get("updated_at") or "")
-    if updated_raw:
+    state_at_raw = str(current_base.get("state_at") or current_base.get("updated_at") or "")
+    if state_at_raw:
         try:
-            updated_dt = datetime.fromisoformat(updated_raw.replace("Z", "+00:00"))
-            if updated_dt.tzinfo is None:
-                updated_dt = updated_dt.replace(tzinfo=timezone.utc)
-            age = max(0, (datetime.now(timezone.utc) - updated_dt.astimezone(timezone.utc)).total_seconds())
-            lines.append(f"- 底座更新时间: 约{format_duration_zh(age)}前")
+            state_at_dt = datetime.fromisoformat(state_at_raw.replace("Z", "+00:00"))
+            if state_at_dt.tzinfo is None:
+                state_at_dt = state_at_dt.replace(tzinfo=timezone.utc)
+            age = max(0, (datetime.now(timezone.utc) - state_at_dt.astimezone(timezone.utc)).total_seconds())
+            lines.append(f"- 状态判断时间: 约{format_duration_zh(age)}前")
         except Exception:
             pass
     lines.extend([
@@ -63,10 +63,10 @@ def build_state_base_checkin_context(*, snapshot: dict | None, clean_state_base_
     for label, key in (
         ("当前状态", "current_state"),
         ("状态摘要", "summary"),
+        ("状态判断时间", "state_at"),
         ("最近情绪", "recent_emotion"),
         ("关系氛围", "relationship_mood"),
         ("回复注意", "caution"),
-        ("最近用户消息", "last_user_message"),
     ):
         value = clean_state_base_text(snapshot.get(key), 180)
         if value:

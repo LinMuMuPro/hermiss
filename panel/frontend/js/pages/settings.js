@@ -2,16 +2,18 @@
    v6.0 — 保存后显示重启遮罩 + 轮询等待容器就绪 */
 
 window.Pages.settings = async function(el) {
-  let model, vision, msgs, waitCfg, wechatStatus;
+  let model, vision, msgs, waitCfg, wechatStatus, convMode;
   try { model = await api('/api/settings/model'); } catch (_) { model = null; }
   try { vision = await api('/api/settings/vision'); } catch (_) { vision = null; }
   try { msgs = await api('/api/settings/messages'); } catch (_) { msgs = null; }
   try { waitCfg = await api('/api/settings/message-wait'); } catch (_) { waitCfg = null; }
+  try { convMode = await api('/api/settings/conversation-mode'); } catch (_) { convMode = null; }
   try { wechatStatus = await api('/api/wechat/status'); } catch (_) { wechatStatus = null; }
 
   const modelConfigured = model && (model.provider || model.model) && model.has_key;
   const visionConfigured = vision && (vision.provider || vision.model) && vision.has_key;
   const wechatBound = !!(wechatStatus && wechatStatus.bound);
+  const currentMode = (convMode && convMode.mode) || 'companion';
 
   el.innerHTML = `
     <h2>设置</h2>
@@ -50,6 +52,26 @@ window.Pages.settings = async function(el) {
     </div>
 
     <!-- 主模型 -->
+    <div class="card settings-wide" style="padding:16px">
+      <div class="card-head">
+        <div>
+          <h3>对话模式</h3>
+          <p class="form-hint">切换后会重启容器。剧情扮演模式只使用 SOUL.md / USER.md；虚拟陪伴模式启用状态底座、记忆插件和主动回访。</p>
+        </div>
+        <span class="badge ${currentMode === 'roleplay' ? 'badge-neutral' : 'badge-ok'}">${currentMode === 'roleplay' ? '剧情扮演' : '虚拟陪伴'}</span>
+      </div>
+      <div class="mode-picker" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:12px">
+        <button class="mode-option ${currentMode === 'companion' ? 'active' : ''}" data-conversation-mode="companion" style="text-align:left;border:1px solid ${currentMode === 'companion' ? 'var(--accent)' : 'var(--border)'};border-radius:14px;padding:14px;background:${currentMode === 'companion' ? 'rgba(67,97,238,.08)' : 'var(--card-bg)'};cursor:pointer">
+          <strong>虚拟陪伴模式</strong>
+          <span class="form-hint" style="display:block;margin-top:6px">启用状态底座、向量记忆、记忆插件和主动回访，适合长期陪伴。</span>
+        </button>
+        <button class="mode-option ${currentMode === 'roleplay' ? 'active' : ''}" data-conversation-mode="roleplay" style="text-align:left;border:1px solid ${currentMode === 'roleplay' ? 'var(--accent)' : 'var(--border)'};border-radius:14px;padding:14px;background:${currentMode === 'roleplay' ? 'rgba(67,97,238,.08)' : 'var(--card-bg)'};cursor:pointer">
+          <strong>剧情扮演模式</strong>
+          <span class="form-hint" style="display:block;margin-top:6px">关闭状态底座、动态记忆和主动回访，只按 SOUL.md / USER.md 扮演。</span>
+        </button>
+      </div>
+    </div>
+
     <div class="card" id="card-model" style="${modelConfigured
       ? 'border:2px solid var(--accent);border-radius:8px;position:relative;padding:16px'
       : 'padding:16px'}">
@@ -176,7 +198,7 @@ window.Pages.settings = async function(el) {
     </div>
 
     <!-- 记忆插件开关 -->
-    <div class=\"card\" style=\"padding:16px\">
+    <div class=\"card\" style=\"display:none;padding:16px\">
       <h3>记忆插件</h3>
       <p style=\"font-size:.82rem;color:var(--text2);margin-bottom:12px\">
         开启后对话会分析存储记忆，关闭后只聊天不记任何内容。
@@ -442,6 +464,32 @@ window.Pages.settings = async function(el) {
   });
 
   // ── Edit toggle ──
+  document.querySelectorAll('[data-conversation-mode]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const mode = btn.dataset.conversationMode;
+      if (!mode || mode === currentMode) return;
+      const modeName = mode === 'roleplay' ? '剧情扮演模式' : '虚拟陪伴模式';
+      const ok = await dialogConfirm(`切换到${modeName}？容器会重启一次。`);
+      if (!ok) return;
+      try {
+        document.querySelectorAll('[data-conversation-mode]').forEach(item => item.disabled = true);
+        await api('/api/settings/conversation-mode', {
+          method: 'POST',
+          body: JSON.stringify({ mode })
+        });
+        showRestartOverlay('容器重启中，约 5-10 秒...');
+        await waitForRestart();
+        hideRestartOverlay();
+        toast(`已切换到${modeName}`, 'ok');
+        navigate('settings');
+      } catch (e) {
+        hideRestartOverlay();
+        toast(e.message, 'err');
+        document.querySelectorAll('[data-conversation-mode]').forEach(item => item.disabled = false);
+      }
+    });
+  });
+
   document.getElementById('btn-model-edit')?.addEventListener('click', () => {
     document.getElementById('model-status').style.display = 'none';
     document.getElementById('model-form').style.display = '';

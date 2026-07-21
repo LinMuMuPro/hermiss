@@ -8,6 +8,13 @@ window.Pages.cron = async function(el) {
     .replace(/"/g, '&quot;');
 
   const fmt = (value) => (value === 0 || value) ? escapeHtml(value) : '-';
+  const formatTime = (value) => {
+    if (!value) return '-';
+    const raw = Number(value);
+    const date = Number.isFinite(raw) ? new Date(raw < 100000000000 ? raw * 1000 : raw) : new Date(value);
+    if (Number.isNaN(date.getTime())) return escapeHtml(value);
+    return escapeHtml(date.toLocaleString('zh-CN', { hour12: false }));
+  };
   const renderActive = (active) => {
     if (!active) return '<div class="empty compact">\u6682\u65e0\u4e3b\u52a8\u56de\u8bbf\u94fe</div>';
     const state = active.short_term_user_state;
@@ -25,7 +32,8 @@ window.Pages.cron = async function(el) {
       line('last_activity_hint', '\u6700\u8fd1\u6d3b\u52a8', active.last_activity_hint),
       line('style_hint', '\u98ce\u683c\u63d0\u793a', active.style_hint),
       line('short_state', '\u77ed\u671f\u72b6\u6001', state ? (state.text || JSON.stringify(state)) : '-'),
-      line('state_base', '\u72b6\u6001\u5e95\u5ea7', base ? (base.summary || JSON.stringify(base)) : '-'),
+      line('state_base', '\u72b6\u6001\u5e95\u5ea7', base ? (base.current_state || base.summary || JSON.stringify(base)) : '-'),
+      line('state_at', '\u72b6\u6001\u5224\u65ad\u65f6\u95f4', base ? formatTime(base.state_at || base.updated_at) : '-'),
     ];
     return `<div class="cron-checkin-card">${rows.join('')}</div>`;
   };

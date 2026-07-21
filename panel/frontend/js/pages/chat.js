@@ -24,6 +24,8 @@ window.Pages.chat = async function(el) {
 
     const FIELD_LABELS = {
       summary: '\u6458\u8981',
+      current_state: '\u5f53\u524d\u72b6\u6001',
+      state_at: '\u72b6\u6001\u5224\u65ad\u65f6\u95f4',
       relationship_mood: '\u5173\u7cfb\u6c1b\u56f4',
       caution: '\u6ce8\u610f\u4e8b\u9879',
       recent_context: '\u6700\u8fd1\u4e0a\u4e0b\u6587',
@@ -61,6 +63,12 @@ window.Pages.chat = async function(el) {
       }
       return String(value);
     };
+    const displayValueFor = (key, value) => {
+      if (key === 'state_at' || key === 'updated_at' || key === 'started_at' || key === 'next_checkin') {
+        return formatTime(value);
+      }
+      return stringifyValue(value);
+    };
 
     const rows = [];
     if (state) {
@@ -73,8 +81,13 @@ window.Pages.chat = async function(el) {
     }
 
     if (base && typeof base === 'object') {
-      Object.entries(base).forEach(([key, value]) => {
-        const displayValue = stringifyValue(value);
+      const preferredKeys = ['current_state', 'summary', 'state_at', 'relationship_mood', 'recent_emotion', 'caution', 'updated_at'];
+      const entries = [
+        ...preferredKeys.filter(key => Object.prototype.hasOwnProperty.call(base, key)).map(key => [key, base[key]]),
+        ...Object.entries(base).filter(([key]) => !preferredKeys.includes(key)),
+      ];
+      entries.forEach(([key, value]) => {
+        const displayValue = displayValueFor(key, value);
         if (!displayValue) return;
         const label = FIELD_LABELS[key] || '\u81ea\u5b9a\u4e49\u5b57\u6bb5';
         rows.push(`<div class="short-state-line"><strong>${escapeHtml(key)}\uff08${escapeHtml(label)}\uff09</strong><em>${escapeHtml(displayValue)}</em></div>`);

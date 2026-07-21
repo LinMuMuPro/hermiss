@@ -79,6 +79,20 @@ CLASSIFY_PROMPT = """[HERMES ANALYSIS — 只做分类，不要回复用户]
 CLASSIFY_SENTINEL = "<hermes_classify>"
 
 
+STATE_BASE_GUIDANCE = """
+
+Additional state-base rules:
+- "状态底座" is NOT a conversation summary and NOT a recap of what the user just said.
+- It should describe the user's inferred current availability/state at the moment of the latest user message.
+- Prefer short state wording such as: 用户现在可以聊天 / 用户正在与你闲聊 / 用户可能在等外卖 / 用户正在打游戏但还能回消息 / 用户准备休息 / 用户暂时没回复.
+- Do not write "用户刚才说..." in 状态底座.
+- Do not copy the latest user message into 状态底座; recent messages are already available in conversation context.
+- If there is no meaningful activity, write a simple availability state, for example: 用户现在正在与你闲聊.
+- "关系氛围" may describe tone briefly, but should not summarize plot or dialogue.
+- "回复注意" should only contain a practical next-reply constraint when needed; otherwise write 无.
+"""
+
+
 NAME_REJECT_TERMS = (
     "问", "几天", "多久", "没见", "好久", "我俩", "我们", "你", "吗", "嘛", "呢",
     "什么", "谁", "哪个", "哪位", "哪里", "怎么", "为什么", "是不是", "有没有",
@@ -328,6 +342,7 @@ Important disambiguation rules:
 7. If Current short-term user state exists, treat the final user message as possibly sent while the user is still doing that activity. Do not replace or end that state unless the user clearly says the activity ended, returned, gave up, or started a mutually exclusive new activity.
 8. Current local time is authoritative for time-of-day. Do not infer "morning/early morning" just because the user says they woke up; if local time is evening/night, describe it as evening/night or simply "刚醒".
 
+{STATE_BASE_GUIDANCE}
 {CLASSIFY_PROMPT}"""
 
 def parse_classify_response(text: str) -> dict | None:

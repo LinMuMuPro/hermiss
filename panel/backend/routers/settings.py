@@ -205,6 +205,10 @@ class MessageWaitConfig(BaseModel):
     proactive_checkin_enabled: bool = True
 
 
+class ConversationModeConfig(BaseModel):
+    mode: str = "companion"
+
+
 class StickerSettings(BaseModel):
     enabled: bool = True
     cooldown_seconds: int = 600
@@ -256,6 +260,101 @@ from services.sticker_service import (
     _sticker_summary,
     _write_sticker_config,
 )
+
+
+def _normalize_conversation_mode(mode: str | None) -> str:
+    raw = (mode or "companion").strip().lower()
+    if raw in {"roleplay", "role_play", "story", "rp", "剧情", "剧情扮演", "剧情扮演模式"}:
+        return "roleplay"
+    return "companion"
+
+
+def _read_conversation_mode(container_id: str | None) -> str:
+    if not container_id:
+        return "companion"
+    try:
+        values = _env_values(container_id)
+        return _normalize_conversation_mode(values.get("HERMISS_RUNTIME_MODE"))
+    except Exception:
+        return "companion"
+
+
+def _set_message_analyzer_enabled(config_text: str, enabled: bool) -> str:
+    data = _load_yaml_config(config_text)
+    plugins = data.setdefault("plugins", {})
+    plugin_list = plugins.setdefault("enabled", [])
+    if plugin_list is None:
+        plugin_list = []
+        plugins["enabled"] = plugin_list
+    if not isinstance(plugin_list, list):
+        raise HTTPException(500, "config.yaml plugins.enabled 必须是列表")
+    if enabled:
+        if "message-analyzer" not in plugin_list:
+            plugin_list.append("message-analyzer")
+    else:
+        plugins["enabled"] = [item for item in plugin_list if item != "message-analyzer"]
+
+    memory = data.setdefault("memory", {})
+    if isinstance(memory, dict):
+        memory["memory_enabled"] = bool(enabled)
+        memory["user_profile_enabled"] = True
+    return _dump_yaml_config(data)
+
+
+def _clear_dynamic_memory_state(container_id: str) -> None:
+    script = r'''
+set -e
+PROFILE_DIR="/root/.hermes/profiles/hermiss"
+MEMORY_DIR="$PROFILE_DIR/memory"
+mkdir -p "$MEMORY_DIR"
+python3 - <<'PY'
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+memory_dir = Path("/root/.hermes/profiles/hermiss/memory")
+state_path = memory_dir / "short_term_user_state.json"
+state_path.write_text(json.dumps({
+    "status": "none",
+    "reason": "roleplay_mode_enabled",
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+    "state": None,
+    "base": None,
+}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+active_path = memory_dir / "active_checkin.json"
+job_ids = []
+if active_path.exists():
+    try:
+        data = json.loads(active_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            for key in ("job_id", "primary_job_id"):
+                value = data.get(key)
+                if value:
+                    job_ids.append(str(value))
+            for item in data.get("jobs") or []:
+                if isinstance(item, dict) and item.get("job_id"):
+                    job_ids.append(str(item["job_id"]))
+    except Exception:
+        pass
+    active_path.write_text(json.dumps({
+        "status": "cancelled",
+        "reason": "roleplay_mode_enabled",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+print("\n".join(dict.fromkeys(job_ids)))
+PY
+'''
+    result = docker_svc.exec_in_container(container_id, script, timeout=20)
+    for job_id in (result.get("output") or "").splitlines():
+        clean_id = job_id.strip()
+        if clean_id and clean_id != "unknown":
+            docker_svc.exec_in_container(
+                container_id,
+                f"hermiss --profile hermiss cron delete {shlex.quote(clean_id)} >/dev/null 2>&1 || true",
+                timeout=10,
+            )
 
 @router.get("/model")
 def get_model_config(token: str = Depends(get_token), db: Session = Depends(get_db)):
@@ -507,6 +606,52 @@ def update_message_wait_config(data: MessageWaitConfig, token: str = Depends(get
 # ═══════════════════════════════════════════
 # 表情包插件
 # ═══════════════════════════════════════════
+
+@router.get("/conversation-mode")
+def get_conversation_mode(token: str = Depends(get_token), db: Session = Depends(get_db)):
+    user = get_current_user(token, db)
+    mode = _read_conversation_mode(user.container_id)
+    return {
+        "mode": mode,
+        "memory_enabled": mode == "companion",
+        "state_base_enabled": mode == "companion",
+        "proactive_checkin_enabled": mode == "companion",
+    }
+
+
+@router.post("/conversation-mode")
+def update_conversation_mode(data: ConversationModeConfig, token: str = Depends(get_token), db: Session = Depends(get_db)):
+    user = get_current_user(token, db)
+    _check_container(user)
+    mode = _normalize_conversation_mode(data.mode)
+    companion_enabled = mode == "companion"
+
+    try:
+        config = docker_svc.read_file(user.container_id, _CONFIG_PATH)
+    except Exception:
+        raise HTTPException(500, "无法读取容器配置")
+
+    config = _set_message_analyzer_enabled(config, companion_enabled)
+    docker_svc.write_file(user.container_id, _CONFIG_PATH, config)
+    docker_svc.update_env(user.container_id, {
+        "HERMISS_RUNTIME_MODE": mode,
+        "HERMISS_PROACTIVE_CHECKIN_ENABLED": "true" if companion_enabled else "false",
+        "HERMISS_MEMORY_VECTOR_ENABLED": "true" if companion_enabled else "false",
+    })
+    if not companion_enabled:
+        _clear_dynamic_memory_state(user.container_id)
+    docker_svc.restart_container(user.container_id)
+
+    from operation_log import log_action
+    log_action(user.email, "update_conversation_mode", f"container:{user.container_id}", mode, user.container_id)
+    return {
+        "status": "updated",
+        "mode": mode,
+        "memory_enabled": companion_enabled,
+        "state_base_enabled": companion_enabled,
+        "proactive_checkin_enabled": companion_enabled,
+    }
+
 
 @router.get("/stickers")
 def get_sticker_settings(token: str = Depends(get_token), db: Session = Depends(get_db)):
