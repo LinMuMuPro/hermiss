@@ -306,13 +306,18 @@ def _clear_dynamic_memory_state(container_id: str) -> None:
 set -e
 PROFILE_DIR="/root/.hermes/profiles/hermiss"
 MEMORY_DIR="$PROFILE_DIR/memory"
-mkdir -p "$MEMORY_DIR"
+REMINDERS_DIR="$PROFILE_DIR/reminders"
+CRON_JOBS="$PROFILE_DIR/cron/jobs.json"
+mkdir -p "$MEMORY_DIR" "$REMINDERS_DIR"
 python3 - <<'PY'
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-memory_dir = Path("/root/.hermes/profiles/hermiss/memory")
+profile_dir = Path("/root/.hermes/profiles/hermiss")
+memory_dir = profile_dir / "memory"
+reminders_dir = profile_dir / "reminders"
+cron_jobs_path = profile_dir / "cron" / "jobs.json"
 state_path = memory_dir / "short_term_user_state.json"
 state_path.write_text(json.dumps({
     "status": "none",
@@ -322,26 +327,65 @@ state_path.write_text(json.dumps({
     "base": None,
 }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-active_path = memory_dir / "active_checkin.json"
 job_ids = []
-if active_path.exists():
+
+def collect_job_id(value):
+    if value:
+        job_ids.append(str(value))
+
+def cancel_active_file(active_path: Path):
+    if not active_path.exists():
+        return
     try:
         data = json.loads(active_path.read_text(encoding="utf-8"))
         if isinstance(data, dict):
             for key in ("job_id", "primary_job_id"):
-                value = data.get(key)
-                if value:
-                    job_ids.append(str(value))
-            for item in data.get("jobs") or []:
+                collect_job_id(data.get(key))
+            for key in ("job_ids", "jobs"):
+                items = data.get(key) or []
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    if isinstance(item, dict):
+                        collect_job_id(item.get("job_id") or item.get("id"))
+                    else:
+                        collect_job_id(item)
+            for item in data.get("followups") or []:
                 if isinstance(item, dict) and item.get("job_id"):
-                    job_ids.append(str(item["job_id"]))
+                    collect_job_id(item["job_id"])
     except Exception:
         pass
     active_path.write_text(json.dumps({
+        "cancelled": True,
         "status": "cancelled",
         "reason": "roleplay_mode_enabled",
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+for active_path in (
+    reminders_dir / "active_checkin.json",
+    memory_dir / "active_checkin.json",
+):
+    cancel_active_file(active_path)
+
+if cron_jobs_path.exists():
+    try:
+        cron_data = json.loads(cron_jobs_path.read_text(encoding="utf-8"))
+        jobs = cron_data.get("jobs") if isinstance(cron_data, dict) else cron_data
+        if isinstance(jobs, dict):
+            iterable = jobs.values()
+        elif isinstance(jobs, list):
+            iterable = jobs
+        else:
+            iterable = []
+        for job in iterable:
+            if not isinstance(job, dict):
+                continue
+            text = "\n".join(str(job.get(k) or "") for k in ("name", "prompt", "description"))
+            if "[HERMES PROACTIVE REPLY]" in text or "active_checkin.json" in text:
+                collect_job_id(job.get("id") or job.get("job_id"))
+    except Exception:
+        pass
 
 print("\n".join(dict.fromkeys(job_ids)))
 PY
